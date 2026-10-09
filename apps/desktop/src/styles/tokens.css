@@ -1,0 +1,142 @@
+/* Design tokens: colour (light and dark), type, spacing, radius, shadow.
+   Set data-theme="light" or "dark" on <html>. Components read the semantic
+   tokens; the palette-* primitives exist only to define them. */
+@font-face { font-family: "Inter"; src: url("../assets/fonts/Inter-Variable-latin.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+:root, [data-theme="light"] {
+  --palette-navy: #061a35;
+  --palette-deep-blue: #063b91;
+  --palette-blue: #0868e8;
+  --palette-cyan: #08b7f5;
+  --palette-white: #ffffff;
+  --palette-soft-gray: #f5f7fa;
+  --palette-text-gray: #536273;
+  --palette-line: #e6eaf0;
+  --surface: var(--palette-white);
+  --surface-subtle: var(--palette-soft-gray);
+  --surface-raised: var(--palette-white);
+  --surface-sunken: #eef2f7;
+  --surface-brand: var(--palette-navy);
+  --ink: var(--palette-navy);
+  --ink-muted: var(--palette-text-gray);
+  --ink-disabled: #8a97a8;
+  --on-brand: var(--palette-white);
+  --on-brand-muted: #b4c2d3;
+  --border: var(--palette-line);
+  --border-strong: #7a899b;
+  --primary: var(--palette-blue);
+  --primary-hover: #0657c4;
+  --primary-pressed: var(--palette-deep-blue);
+  --on-primary: var(--palette-white);
+  --primary-subtle: #e9f2fe;
+  --link: var(--palette-blue);
+  --link-hover: var(--palette-deep-blue);
+  --on-primary-subtle: var(--palette-deep-blue);
+  --accent: var(--palette-cyan);
+  --focus-ring: var(--palette-blue);
+  --success: #067647;
+  --success-subtle: #ecfdf3;
+  --warning: #b54708;
+  --warning-subtle: #fff6e5;
+  --danger: #c8261c;
+  --danger-subtle: #fef1f0;
+  --on-danger: #ffffff;
+  --record: #ff5d73;
+  --on-record: var(--palette-navy);
+  --immersive-surface: #000000;
+  --immersive-ink: #ffffff;
+  --scrim: #061a358f;
+  --shadow-xs: 0 1px 2px rgba(6, 26, 53, 0.05);
+  --shadow-sm: 0 2px 6px rgba(6, 26, 53, 0.06), 0 1px 2px rgba(6, 26, 53, 0.04);
+  --shadow-md: 0 8px 24px rgba(6, 26, 53, 0.08);
+  --shadow-lg: 0 20px 48px rgba(6, 26, 53, 0.12);
+}
+[data-theme="dark"] {
+  --surface: #061a35;
+  --surface-subtle: #0a2242;
+  --surface-raised: #0e2a50;
+  --surface-sunken: #04132a;
+  --surface-brand: #030e1f;
+  --ink: #f2f6fb;
+  --ink-muted: #a3b3c7;
+  --ink-disabled: #5d7390;
+  --on-brand: #ffffff;
+  --on-brand-muted: #a3b3c7;
+  --border: #1d3a60;
+  --border-strong: #6c86a6;
+  --primary: #4d9bff;
+  --primary-hover: #6aacff;
+  --primary-pressed: #3d8bff;
+  --on-primary: var(--palette-navy);
+  --primary-subtle: #0f305c;
+  --link: var(--palette-cyan);
+  --link-hover: #5fd0fa;
+  --on-primary-subtle: #8fd9fb;
+  --focus-ring: var(--palette-cyan);
+  --success: #47cd89;
+  --success-subtle: #0b3325;
+  --warning: #f5a524;
+  --warning-subtle: #3a2a0c;
+  --danger: #ff8a80;
+  --danger-subtle: #3d1518;
+  --on-danger: #1a0503;
+  --scrim: #000000a3;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
+}
+:root {
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+  --space-32: 128px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+  --touch-target: 44px;
+  --container: 1200px;
+  --container-text: 720px;
+  --header-height: 72px;
+  --z-sticky: 100;
+  --z-dropdown: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --gradient-brand: linear-gradient(120deg, #061A35 0%, #0868E8 60%, #08B7F5 100%);
+  --gradient-brand-subtle: linear-gradient(120deg, rgba(8, 104, 232, 0.08) 0%, rgba(8, 183, 245, 0.08) 100%);
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 64px; line-height: 68px; font-weight: 700; letter-spacing: -0.03em; }
+.display-sm { font-family: var(--font-sans); font-size: 40px; line-height: 44px; font-weight: 700; letter-spacing: -0.025em; }
+.h1 { font-family: var(--font-sans); font-size: 48px; line-height: 56px; font-weight: 700; letter-spacing: -0.025em; }
+.h1-sm { font-family: var(--font-sans); font-size: 32px; line-height: 40px; font-weight: 700; letter-spacing: -0.02em; }
+.h2 { font-family: var(--font-sans); font-size: 36px; line-height: 44px; font-weight: 600; letter-spacing: -0.02em; }
+.h3 { font-family: var(--font-sans); font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+.lead { font-family: var(--font-sans); font-size: 20px; line-height: 30px; font-weight: 400; }
+.body-lg { font-family: var(--font-sans); font-size: 18px; line-height: 28px; font-weight: 400; }
+.eyebrow { font-family: var(--font-sans); font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.title-xl { font-family: var(--font-sans); font-size: 28px; line-height: 36px; font-weight: 700; letter-spacing: -0.02em; }
+.title-lg { font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.title { font-family: var(--font-sans); font-size: 18px; line-height: 26px; font-weight: 600; }
+.heading { font-family: var(--font-sans); font-size: 16px; line-height: 24px; font-weight: 600; }
+.body { font-family: var(--font-sans); font-size: 16px; line-height: 24px; font-weight: 400; }
+.body-sm { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 600; }
+.caption { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 400; }
+.code { font-family: var(--font-mono); font-size: 14px; line-height: 20px; font-weight: 400; }

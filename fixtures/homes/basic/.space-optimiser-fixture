@@ -1,0 +1,2 @@
+This directory is a fake home for tests. The executor test setup refuses any
+home directory that does not contain this marker file (phase 10).
