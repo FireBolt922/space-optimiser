@@ -1,0 +1,12 @@
+# Capability review (milestone M1, phase 3):
+# - No shell, fs, dialog, http, or opener plugin is installed or granted.
+# - No core permission is granted: the window needs none yet. Scan progress
+#   events add core:event:default in M2/M3, and only that.
+# - The app's own commands (start_scan, cancel_scan, get_scan, build_plan,
+#   confirm_plan, execute_plan, reveal) take typed payloads with
+#   deny_unknown_fields. None accepts a path.
+# - The webview loads no remote content; see the CSP in tauri.conf.json.
+identifier = "default"
+description = "The main window. Grants nothing beyond the app's own typed commands."
+windows = ["main"]
+permissions = []

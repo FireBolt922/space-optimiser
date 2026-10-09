@@ -1,0 +1,19 @@
+[package]
+name = "space-optimiser-desktop"
+description = "Thin Tauri shell. Forwards typed commands to the engine and holds no file logic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "space_optimiser_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+space-optimiser-engine = { path = "../../../crates/engine" }
+tauri.workspace = true
