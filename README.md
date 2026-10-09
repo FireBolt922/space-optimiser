@@ -18,7 +18,7 @@ The planned application runs on:
 
 Each platform has its own locations, permission rules, and cleanup tools. A path that is safe on one system is not assumed to be safe on another.
 
-The only cleanups measured so far were on one Apple Silicon Mac. Windows and Ubuntu behavior in the plan is proposed, not measured. See `develop-eggs/what_we_Actually_did.md`.
+The only cleanups measured so far were on one Apple Silicon Mac. Windows and Ubuntu behavior is proposed, not measured.
 
 ## Workflow
 
@@ -42,7 +42,7 @@ The product target is narrower:
 
 > Space Optimiser only removes files in locations it has a reviewed rule for, and only after you confirm. It does not clean your documents, photos, downloads, or source code, and it does not change system settings, passwords, or app configuration. A confirmed cleanup can still make an app rebuild a cache or download files again.
 
-The full argument and the enforceable rules are in `develop-eggs/implementation-plan/phase-02-safety-and-product-scope.md`.
+The enforceable rules (allowlist, denylist, re-validation before every removal, no elevation, no shell) are summarized in [AGENTS.md](AGENTS.md).
 
 ## Proposed technology
 
@@ -50,26 +50,14 @@ The full argument and the enforceable rules are in `develop-eggs/implementation-
 - TypeScript and React for the interface.
 - Tauri 2 as the desktop shell.
 
-Tauri is recommended because the interface cannot use Node to delete files on its own, the installed app stays smaller than Electron, and one Rust engine can serve all three operating systems. The comparison is in phase 3. No framework has been installed.
+Tauri is recommended because the interface cannot use Node to delete files on its own, the installed app stays smaller than Electron, and one Rust engine can serve all three operating systems. No framework has been installed.
 
 ## Status
 
 Planning only. There is no scanner, no interface, and no installer.
 
-| Document | What it is |
-| --- | --- |
-| [develop-eggs/README.md](develop-eggs/README.md) | How to use the planning notes |
-| [develop-eggs/what_we_Actually_did.md](develop-eggs/what_we_Actually_did.md) | Cleanups that were actually done, with measurements |
-| [develop-eggs/implementation-plan/README.md](develop-eggs/implementation-plan/README.md) | Phase index and MVP cut |
-
-## Planning notes are local
-
-`/develop-eggs/` is listed in `.gitignore`. A normal commit will not include the plan. That is intentional: the notes stay on the machine where they were written.
-
-This repository has no commits yet, and `develop-eggs/` has never been tracked. No history rewrite is required.
-
-If these notes should be shared later, remove the `/develop-eggs/` line from `.gitignore` or run `git add -f develop-eggs`. Until then, cloning this repository does not bring the plan with it. Keep a copy if you need one on another machine.
+Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it.
 
 ## Development
 
-Agents working in this repository must follow [AGENTS.md](AGENTS.md). Implementation starts at phase 1 only after the plan is accepted. Do not add application code during planning.
+Agents working in this repository must follow [AGENTS.md](AGENTS.md). Implementation starts only after the plan is accepted. Do not add application code during planning.

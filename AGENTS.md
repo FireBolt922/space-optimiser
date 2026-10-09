@@ -4,11 +4,12 @@ Read this file and the relevant plan before changing the repository.
 
 ## Plans
 
-- Planning lives in `develop-eggs/`. That directory is gitignored, so it exists only on a machine that has the files. Read it locally before implementing.
-- Start with `develop-eggs/implementation-plan/README.md`, then the phase you are executing.
-- `develop-eggs/what_we_Actually_did.md` is history. Do not turn a past manual action into a product feature unless the cleanup catalog marks it as allowed.
+- Planning notes are kept locally and are not tracked in git. The ignored location is listed in `.gitignore`. If the notes exist on this machine, read their README before implementing. If they do not exist, ask for them before writing application code.
+- Start with the implementation-plan overview, then the phase you are executing.
+- The history note records past manual cleanups. Do not turn a past manual action into a product feature unless the cleanup catalog marks it as allowed.
 - Stay inside the current phase. Do not start a later phase's features early.
 - If a requirement changes, update the plan, the cleanup catalog, and the tests in the same change.
+- Do not link to, quote paths from, or commit the planning notes in tracked files.
 
 ## Safety
 
@@ -23,6 +24,6 @@ Read this file and the relevant plan before changing the repository.
 ## Build discipline
 
 - Use test-driven development for policy, path validation, deduplication, and execution. Write the failing test, then the code.
-- Keep the scan engine, policy, platform adapters, executor, and UI separate, as described in phase 3.
+- Keep the scan engine, policy, platform adapters, executor, and UI separate, as described in the architecture phase.
 - Do not add dependencies, packaging, or a new platform behavior without a plan update.
 - Do not claim a phase is complete without the evidence named in that phase's acceptance criteria.
