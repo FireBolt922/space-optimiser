@@ -27,3 +27,11 @@ Read this file and the relevant plan before changing the repository.
 - Keep the scan engine, policy, platform adapters, executor, and UI separate, as described in the architecture phase.
 - Do not add dependencies, packaging, or a new platform behavior without a plan update.
 - Do not claim a phase is complete without the evidence named in that phase's acceptance criteria.
+
+## Visual design
+
+- Style the UI only with the semantic tokens in `apps/desktop/src/styles/tokens.css` (`surface`, `ink`, `border`, `primary`, ...). Do not use the `palette-*` primitives or hard-coded colours in components.
+- Dark is the default theme (`data-theme="dark"` on `<html>`). Every text colour pair must stay at 4.5:1 or more in both themes.
+- Inter is bundled locally. Do not load fonts, styles, or icons from a CDN; the CSP blocks remote content.
+- No inline styles (the release CSP blocks them), no gradients on controls, no pill buttons. One primary button per view.
+- The app icon masters are in `apps/desktop/src-tauri/icons/source/`. Regenerate the platform icons from the `-desktop` variant with `npx tauri icon`.

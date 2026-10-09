@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Space Optimiser">
+  <title>Space Optimiser</title>
+  <!-- Desktop variant: the master artwork inside the macOS icon grid
+       (824 px rounded square, 100 px margin). Desktops do not mask icons, so
+       Tauri's macOS, Windows, and Linux icons are generated from this file. -->
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <g transform="translate(100 100) scale(0.8046875)">
+      <rect width="1024" height="1024" fill="#0868e8"/>
+      <rect x="212" y="233" width="600" height="150" rx="40" fill="#b3e8fc"/>
+      <rect x="212" y="459" width="600" height="150" rx="40" fill="#ffffff"/>
+      <rect x="212" y="641" width="600" height="150" rx="40" fill="#ffffff"/>
+      <g fill="#0868e8">
+        <rect x="292" y="519" width="176" height="30" rx="15"/>
+        <circle cx="732" cy="534" r="22"/>
+        <rect x="292" y="701" width="176" height="30" rx="15"/>
+        <circle cx="732" cy="716" r="22"/>
+      </g>
+    </g>
+  </g>
+</svg>

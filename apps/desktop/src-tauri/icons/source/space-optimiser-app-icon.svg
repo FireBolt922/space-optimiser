@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Space Optimiser">
+  <title>Space Optimiser</title>
+  <!-- Blue ground, white drives, a cyan tint for the freed slot.
+       Full-bleed master; app stores and the OS apply their own corner mask. -->
+  <rect width="1024" height="1024" fill="#0868e8"/>
+  <rect x="212" y="233" width="600" height="150" rx="40" fill="#b3e8fc"/>
+  <rect x="212" y="459" width="600" height="150" rx="40" fill="#ffffff"/>
+  <rect x="212" y="641" width="600" height="150" rx="40" fill="#ffffff"/>
+  <g fill="#0868e8">
+    <rect x="292" y="519" width="176" height="30" rx="15"/>
+    <circle cx="732" cy="534" r="22"/>
+    <rect x="292" y="701" width="176" height="30" rx="15"/>
+    <circle cx="732" cy="716" r="22"/>
+  </g>
+</svg>
