@@ -1,0 +1,20 @@
+# Catalog row ids in the first release (Normal Scan and Deep Scan sections).
+# Changing a row id in the catalog means changing this list and the Rust
+# `CatalogId` enum in the same change. Checked by crates/engine/tests/policy.rs.
+"user-temp"
+"thumbnail-cache"
+"windows-thumbcache"
+"font-cache"
+"browser-http-cache"
+"pkg-npm-cache"
+"pkg-npx"
+"pkg-pnpm-store"
+"pkg-yarn-cache"
+"pkg-pip-cache"
+"pkg-uv-cache"
+"pkg-cargo-cache"
+"pkg-gradle-caches"
+"pkg-nuget-http"
+"user-logs-old"
+"docker-build-cache"
+"large-files-report"

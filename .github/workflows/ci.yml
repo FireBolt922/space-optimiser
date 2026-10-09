@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           if grep -rnE 'remove_file|remove_dir|Command::new' crates apps/desktop/src-tauri/src; then
-            echo "Delete and process calls are not allowed in milestone M1." >&2
+            echo "Delete and process calls are not allowed before the executor (milestone M3)." >&2
             exit 1
           fi
 

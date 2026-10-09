@@ -1,4 +1,4 @@
-//! Milestone M1: every command is wired and returns Unsupported. Nothing can
+//! Until M3, every command is wired and returns Unsupported. Nothing can
 //! delete yet.
 
 use space_optimiser_engine::{
@@ -11,7 +11,7 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str) -> T {
 }
 
 #[test]
-fn every_command_is_unsupported_in_m1() {
+fn every_command_is_unsupported_until_m3() {
     let scan: ScanRef = parse(r#"{"scan_id":1}"#);
     let plan: PlanRef = parse(r#"{"plan_id":1}"#);
     let unsupported = |r: Result<(), EngineError>| matches!(r, Err(EngineError::Unsupported));
