@@ -1,9 +1,9 @@
 name: CI
 
+# Runs only when commits land on main (a direct push or a merged pull request).
 on:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
