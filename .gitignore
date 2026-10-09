@@ -63,6 +63,10 @@ Desktop.ini
 *.log
 tmp/
 .cache/
+# Test fixture homes need these names; they hold a few bytes of text only.
+!fixtures/**/tmp/
+!fixtures/**/.cache/
+!fixtures/**/*.log
 
 # Tauri regenerates these schemas on every build
 apps/desktop/src-tauri/gen/

@@ -4,7 +4,9 @@
 //! forwards typed commands here; the UI never sends a path. Scan, policy,
 //! measurement, and execution live in separate modules (phase 3).
 //!
-//! Milestone M1: every command is wired and returns [`EngineError::Unsupported`].
+//! Milestone M2: [`discover`] finds `user-temp` candidates under validated
+//! roots and never deletes. Every command still returns
+//! [`EngineError::Unsupported`] until M3 wires the scan to the UI.
 
 pub mod discover;
 pub mod execute;

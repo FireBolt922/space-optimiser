@@ -24,7 +24,7 @@ fn start_scan_rejects_an_unknown_mode() {
 
 #[test]
 fn execute_plan_rejects_a_path_field() {
-    let json = r#"{"plan_id":1,"confirmation_token":"t","path":"/Users/me/Documents"}"#;
+    let json = r#"{"plan_id":1,"confirmation_token":"t","path":"/Users/me/Documents"}"#; // hygiene: data only
     assert!(serde_json::from_str::<ExecutePlanArgs>(json).is_err());
 }
 
@@ -36,7 +36,7 @@ fn execute_plan_accepts_id_and_token_only() {
 
 #[test]
 fn build_plan_rejects_paths_in_place_of_ids() {
-    let json = r#"{"scan_id":1,"candidate_ids":["/tmp/x"]}"#;
+    let json = r#"{"scan_id":1,"candidate_ids":["/tmp/x"]}"#; // hygiene: data only
     assert!(serde_json::from_str::<BuildPlanArgs>(json).is_err());
 }
 

@@ -1,9 +1,359 @@
-//! macOS, Windows, and Linux path adapters. Implemented in M2 (phase 4) and
-//! hardened in M7 (phase 9).
+//! macOS, Windows, and Linux path adapters (phase 4 item 3, moved from
+//! phase 9). Folders come from OS APIs, not from environment variables;
+//! hardening continues in M7 (phase 9).
+
+use std::fs::{self, Metadata};
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::model::CandidateId;
+use crate::policy::Context;
+#[cfg(target_os = "linux")]
+use crate::policy::OwnerRule;
 use crate::{EngineError, Result};
 
 pub(crate) fn reveal(_candidate: CandidateId) -> Result<()> {
     Err(EngineError::Unsupported)
+}
+
+/// Folders under a home that are never walked for deletion (catalog
+/// denylist). The union over all platforms: a name that does not exist on
+/// this OS protects nothing and costs nothing.
+const PROTECTED_UNDER_HOME: &[&str] = &[
+    "Documents",
+    "Desktop",
+    "Downloads",
+    "Pictures",
+    "Movies",
+    "Music",
+    "Videos",
+    "Public",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".config/gcloud",
+    "Library/Mobile Documents",
+    "Library/CloudStorage",
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Mail",
+    "Library/Messages",
+    "Library/Safari",
+    "Library/Keychains",
+    "Dropbox",
+    "Google Drive",
+];
+
+/// The standard protected folders under `home`, the XDG user folders from
+/// `home/.config/user-dirs.dirs`, and any `OneDrive*` folder in `home`.
+pub(crate) fn protected_under_home(home: &Path) -> Vec<PathBuf> {
+    let mut protected: Vec<PathBuf> = PROTECTED_UNDER_HOME.iter().map(|p| home.join(p)).collect();
+    if let Ok(contents) = fs::read_to_string(home.join(".config/user-dirs.dirs")) {
+        protected.extend(parse_user_dirs(&contents, home));
+    }
+    if let Ok(entries) = fs::read_dir(home) {
+        protected.extend(
+            entries
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("OneDrive"))
+                .map(|e| e.path()),
+        );
+    }
+    protected
+}
+
+/// Parses `user-dirs.dirs` (`XDG_<NAME>_DIR="$HOME/<path>"` or an absolute
+/// path). A value equal to the home itself means "unset" in the XDG spec and
+/// is dropped, so the home never becomes a protected folder by accident.
+pub fn parse_user_dirs(contents: &str, home: &Path) -> Vec<PathBuf> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().split_once('=')?;
+            if !(key.starts_with("XDG_") && key.ends_with("_DIR")) {
+                return None;
+            }
+            let value = value.strip_prefix('"')?.strip_suffix('"')?;
+            let path = match value.strip_prefix("$HOME") {
+                Some(rest) => home.join(rest.trim_start_matches('/')),
+                None if value.starts_with('/') => PathBuf::from(value),
+                None => return None,
+            };
+            (path != home).then_some(path)
+        })
+        .collect()
+}
+
+pub(crate) fn owned_by_user(ctx: &Context, path: &Path, metadata: &Metadata) -> bool {
+    sys::owned_by_user(ctx, path, metadata)
+}
+
+/// Resolves this machine's home, protected folders, and temp roots.
+pub fn resolve_context() -> io::Result<Context> {
+    sys::resolve_context()
+}
+
+#[cfg(unix)]
+fn home_from_passwd() -> io::Result<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    // `$HOME` can still name the invoking user under sudo; the password
+    // database names the effective one.
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: an all-zero passwd is a valid out-parameter.
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result = std::ptr::null_mut();
+    // SAFETY: every pointer is valid and `buffer.len()` is its true length.
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::geteuid(),
+            &mut pwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() || pwd.pw_dir.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no home directory for this user",
+        ));
+    }
+    // SAFETY: getpwuid_r succeeded, so `pw_dir` is NUL-terminated in `buffer`.
+    let dir = unsafe { CStr::from_ptr(pwd.pw_dir) };
+    Ok(PathBuf::from(OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(target_os = "macos")]
+mod sys {
+    use super::*;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::MetadataExt;
+
+    pub fn owned_by_user(ctx: &Context, _path: &Path, metadata: &Metadata) -> bool {
+        metadata.uid() == ctx.euid()
+    }
+
+    pub fn resolve_context() -> io::Result<Context> {
+        let home = home_from_passwd()?;
+        let temp = user_temp_dir()?;
+        Ok(Context::new(
+            home.clone(),
+            protected_under_home(&home),
+            vec![(temp, crate::policy::OwnerRule::Root)],
+            Some(PathBuf::from("/private/var/folders")),
+        ))
+    }
+
+    /// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the per-user temp directory,
+    /// whatever `TMPDIR` says. Never `/private/tmp`.
+    fn user_temp_dir() -> io::Result<PathBuf> {
+        let mut buffer = vec![0u8; 1024];
+        // SAFETY: `buffer` is writable for its full length.
+        let needed = unsafe {
+            libc::confstr(
+                libc::_CS_DARWIN_USER_TEMP_DIR,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+            )
+        };
+        if needed == 0 || needed > buffer.len() {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.truncate(needed - 1);
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod sys {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    pub fn owned_by_user(ctx: &Context, _path: &Path, metadata: &Metadata) -> bool {
+        metadata.uid() == ctx.euid()
+    }
+
+    pub fn resolve_context() -> io::Result<Context> {
+        let home = home_from_passwd()?;
+        // `/tmp` is shared, so each entry's owner is checked. `/var/tmp` is
+        // never emptied.
+        let mut temp_roots = vec![(PathBuf::from("/tmp"), OwnerRule::PerEntry)];
+        let cache_tmp = home.join(".cache/tmp");
+        if cache_tmp.is_dir() {
+            temp_roots.push((cache_tmp, OwnerRule::Root));
+        }
+        Ok(Context::new(
+            home.clone(),
+            protected_under_home(&home),
+            temp_roots,
+            None,
+        ))
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+compile_error!("Space Optimiser supports macOS, Linux, and Windows only.");
+
+#[cfg(windows)]
+pub(crate) fn wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+#[cfg(windows)]
+mod sys {
+    use super::*;
+    use crate::policy::OwnerRule;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+        TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
+    };
+    use windows_sys::Win32::Storage::FileSystem::GetTempPathW;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
+        FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_SkyDrive, FOLDERID_Videos,
+        SHGetKnownFolderPath,
+    };
+    use windows_sys::core::{GUID, PWSTR};
+
+    pub fn resolve_context() -> io::Result<Context> {
+        let home = known_folder(&FOLDERID_Profile)?;
+        let mut protected = protected_under_home(&home);
+        // Known Folders follow redirection (for example Documents moved to
+        // another drive or into OneDrive).
+        for id in [
+            &FOLDERID_Documents,
+            &FOLDERID_Desktop,
+            &FOLDERID_Downloads,
+            &FOLDERID_Pictures,
+            &FOLDERID_Music,
+            &FOLDERID_Videos,
+            &FOLDERID_SkyDrive,
+        ] {
+            if let Ok(path) = known_folder(id) {
+                protected.push(path);
+            }
+        }
+        let mut temp_roots = vec![(temp_path()?, OwnerRule::Root)];
+        if let Ok(local) = known_folder(&FOLDERID_LocalAppData) {
+            // The scan deduplicates the two roots by file identity.
+            temp_roots.push((local.join("Temp"), OwnerRule::Root));
+        }
+        Ok(Context::new(home, protected, temp_roots, None))
+    }
+
+    fn known_folder(id: &GUID) -> io::Result<PathBuf> {
+        let mut raw: PWSTR = std::ptr::null_mut();
+        // SAFETY: `raw` is a valid out-pointer; a null token means this user.
+        let hr = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut raw) };
+        let result = if hr >= 0 && !raw.is_null() {
+            // SAFETY: on success `raw` is a NUL-terminated string.
+            let len = unsafe { (0..).take_while(|&i| *raw.add(i) != 0).count() };
+            // SAFETY: `len` units were just read from `raw`.
+            let units = unsafe { std::slice::from_raw_parts(raw, len) };
+            Ok(PathBuf::from(OsString::from_wide(units)))
+        } else {
+            Err(io::Error::from_raw_os_error(hr))
+        };
+        // SAFETY: the shell allocated `raw` (or it is null, which is allowed).
+        unsafe { CoTaskMemFree(raw as *const _) };
+        result
+    }
+
+    /// `GetTempPathW` honours `TMP`/`TEMP`; validation rejects a hostile value.
+    fn temp_path() -> io::Result<PathBuf> {
+        let mut buffer = vec![0u16; 1024];
+        // SAFETY: `buffer` is writable for its full length.
+        let len = unsafe { GetTempPathW(buffer.len() as u32, buffer.as_mut_ptr()) } as usize;
+        if len == 0 || len > buffer.len() {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.truncate(len);
+        Ok(PathBuf::from(OsString::from_wide(&buffer)))
+    }
+
+    /// The folder's owner is this user, or this token's default owner for new
+    /// objects (an elevated token's files belong to Administrators).
+    pub fn owned_by_user(_ctx: &Context, path: &Path, _metadata: &Metadata) -> bool {
+        let name = wide(path);
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `name` is NUL-terminated; unused outputs are null.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return false;
+        }
+        let owned = token_sids().iter().any(|(buffer, offset)| {
+            // SAFETY: the SID sits at `offset` inside its live, unmoved
+            // buffer, and `owner` lives until `descriptor` is freed.
+            unsafe { EqualSid(owner, buffer.as_ptr().add(*offset) as PSID) != 0 }
+        });
+        // SAFETY: `descriptor` was allocated by GetNamedSecurityInfoW.
+        unsafe { LocalFree(descriptor) };
+        owned
+    }
+
+    /// The token's user SID and default-owner SID: each buffer with the
+    /// offset of its SID.
+    fn token_sids() -> Vec<(Vec<u8>, usize)> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: the pseudo-handle needs no closing; `token` is an out-param.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return Vec::new();
+        }
+        let mut sids = Vec::new();
+        for class in [TokenUser, TokenOwner] {
+            let mut buffer = vec![0u8; 256];
+            let mut len = 0u32;
+            // SAFETY: `buffer` is writable for `buffer.len()` bytes.
+            let ok = unsafe {
+                GetTokenInformation(
+                    token,
+                    class,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as u32,
+                    &mut len,
+                )
+            };
+            if ok == 0 {
+                continue;
+            }
+            // Both TOKEN_USER and TOKEN_OWNER start with a SID pointer into
+            // `buffer`, which stays alive inside `sids`.
+            // SAFETY: GetTokenInformation filled `buffer` with that struct.
+            let sid = unsafe {
+                if class == TokenUser {
+                    (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid
+                } else {
+                    (*buffer.as_ptr().cast::<TOKEN_OWNER>()).Owner
+                }
+            };
+            let offset = sid as usize - buffer.as_ptr() as usize;
+            sids.push((buffer, offset));
+        }
+        // SAFETY: `token` was opened above.
+        unsafe { CloseHandle(token) };
+        sids
+    }
 }

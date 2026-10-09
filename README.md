@@ -56,7 +56,7 @@ Tauri was chosen because the interface cannot use Node to delete files on its ow
 
 ## Status
 
-Skeleton (milestone M1). The workspace builds and an empty window opens. Every engine command is wired and returns "not supported". There is no scanner, no delete code, and no installer.
+Policy and paths (milestone M2). The engine resolves protected folders and temp folders on macOS, Ubuntu, and Windows, and finds old temporary files in test fixtures. It measures them and deletes nothing. The window is still empty: every command it can send returns "not supported" until the first scan screen arrives. There is no delete code and no installer.
 
 Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it.
 

@@ -1,1 +1,498 @@
-//! Catalog ids, the denylist, and the bulk gate. Implemented in M2 (phase 4).
+//! Catalog ids, entry rules, protected folders, and temp-root validation
+//! (phase 4). The catalog is the allowlist: a row that is not here cannot be
+//! reported or acted on.
+
+use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use serde::Serialize;
+
+use crate::measure::{self, FileId};
+use crate::model::{Action, Risk};
+
+/// First-release catalog rows. `fixtures/catalog-mvp-ids.txt` lists the same
+/// ids; a test fails if they drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CatalogId {
+    UserTemp,
+    ThumbnailCache,
+    WindowsThumbcache,
+    FontCache,
+    BrowserHttpCache,
+    PkgNpmCache,
+    PkgNpx,
+    PkgPnpmStore,
+    PkgYarnCache,
+    PkgPipCache,
+    PkgUvCache,
+    PkgCargoCache,
+    PkgGradleCaches,
+    PkgNugetHttp,
+    UserLogsOld,
+    DockerBuildCache,
+    LargeFilesReport,
+}
+
+impl CatalogId {
+    pub const ALL: [CatalogId; 17] = [
+        CatalogId::UserTemp,
+        CatalogId::ThumbnailCache,
+        CatalogId::WindowsThumbcache,
+        CatalogId::FontCache,
+        CatalogId::BrowserHttpCache,
+        CatalogId::PkgNpmCache,
+        CatalogId::PkgNpx,
+        CatalogId::PkgPnpmStore,
+        CatalogId::PkgYarnCache,
+        CatalogId::PkgPipCache,
+        CatalogId::PkgUvCache,
+        CatalogId::PkgCargoCache,
+        CatalogId::PkgGradleCaches,
+        CatalogId::PkgNugetHttp,
+        CatalogId::UserLogsOld,
+        CatalogId::DockerBuildCache,
+        CatalogId::LargeFilesReport,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CatalogId::UserTemp => "user-temp",
+            CatalogId::ThumbnailCache => "thumbnail-cache",
+            CatalogId::WindowsThumbcache => "windows-thumbcache",
+            CatalogId::FontCache => "font-cache",
+            CatalogId::BrowserHttpCache => "browser-http-cache",
+            CatalogId::PkgNpmCache => "pkg-npm-cache",
+            CatalogId::PkgNpx => "pkg-npx",
+            CatalogId::PkgPnpmStore => "pkg-pnpm-store",
+            CatalogId::PkgYarnCache => "pkg-yarn-cache",
+            CatalogId::PkgPipCache => "pkg-pip-cache",
+            CatalogId::PkgUvCache => "pkg-uv-cache",
+            CatalogId::PkgCargoCache => "pkg-cargo-cache",
+            CatalogId::PkgGradleCaches => "pkg-gradle-caches",
+            CatalogId::PkgNugetHttp => "pkg-nuget-http",
+            CatalogId::UserLogsOld => "user-logs-old",
+            CatalogId::DockerBuildCache => "docker-build-cache",
+            CatalogId::LargeFilesReport => "large-files-report",
+        }
+    }
+
+    pub const fn risk(self) -> Risk {
+        match self {
+            CatalogId::UserTemp
+            | CatalogId::ThumbnailCache
+            | CatalogId::FontCache
+            | CatalogId::UserLogsOld => Risk::Low,
+            CatalogId::WindowsThumbcache | CatalogId::LargeFilesReport => Risk::Info,
+            _ => Risk::Medium,
+        }
+    }
+
+    /// Whether "Select safe items" may include the row. Only low-risk rows.
+    pub const fn bulk_safe(self) -> bool {
+        matches!(self.risk(), Risk::Low)
+    }
+
+    pub const fn action(self) -> Action {
+        match self {
+            CatalogId::WindowsThumbcache | CatalogId::LargeFilesReport => Action::Report,
+            CatalogId::PkgNpmCache
+            | CatalogId::PkgPnpmStore
+            | CatalogId::PkgYarnCache
+            | CatalogId::PkgPipCache
+            | CatalogId::PkgUvCache
+            | CatalogId::DockerBuildCache => Action::RunTool,
+            _ => Action::Delete,
+        }
+    }
+
+    /// Static text keyed by id, so the UI never invents a reason from a file
+    /// name (phase 4 design decisions).
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            CatalogId::UserTemp => {
+                "Temporary files more than a day old. Apps recreate what they still need."
+            }
+            CatalogId::ThumbnailCache => {
+                "Thumbnail images. They are rebuilt the next time you view a folder."
+            }
+            CatalogId::WindowsThumbcache => {
+                "Explorer's thumbnail database. Explorer keeps it open, so it is shown for information only."
+            }
+            CatalogId::FontCache => "Font cache files. The next app start rebuilds them.",
+            CatalogId::BrowserHttpCache => {
+                "Copies of web pages and images. Pages load from the network again. Quit the browser first."
+            }
+            CatalogId::PkgNpmCache => {
+                "Downloaded npm packages. They download again when a project needs them."
+            }
+            CatalogId::PkgNpx => {
+                "Packages fetched by npx. They download again on the next npx run."
+            }
+            CatalogId::PkgPnpmStore => {
+                "pnpm packages that no project references. Savings can be much smaller than the store size."
+            }
+            CatalogId::PkgYarnCache => {
+                "Downloaded Yarn packages. They download again on the next install."
+            }
+            CatalogId::PkgPipCache => {
+                "Downloaded Python wheels. They download again on the next install."
+            }
+            CatalogId::PkgUvCache => {
+                "uv's package cache. The size is an estimate because files can be shared with environments."
+            }
+            CatalogId::PkgCargoCache => {
+                "Downloaded Rust crates and git dependencies. They download again on the next build."
+            }
+            CatalogId::PkgGradleCaches => {
+                "Gradle's dependency cache. The next build downloads dependencies again."
+            }
+            CatalogId::PkgNugetHttp => {
+                "NuGet's download cache. Installed packages are not touched."
+            }
+            CatalogId::UserLogsOld => "Log files more than 30 days old.",
+            CatalogId::DockerBuildCache => {
+                "Docker build cache that no image uses. The next image build is slower."
+            }
+            CatalogId::LargeFilesReport => {
+                "Large files in your home folder. Shown so you can decide; never removed."
+            }
+        }
+    }
+
+    pub const fn location_label(self) -> &'static str {
+        match self {
+            CatalogId::UserTemp => "Temporary files",
+            CatalogId::ThumbnailCache | CatalogId::WindowsThumbcache => "Thumbnails",
+            CatalogId::FontCache => "Font cache",
+            CatalogId::BrowserHttpCache => "Browser cache",
+            CatalogId::UserLogsOld => "Logs",
+            CatalogId::DockerBuildCache => "Docker",
+            CatalogId::LargeFilesReport => "Home folder",
+            _ => "Developer caches",
+        }
+    }
+}
+
+/// `user-temp` entries must be older than this (catalog `user-temp`).
+pub const TEMP_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Age is the newest of the two timestamps (`mtime`/`ctime`, or last-write/
+/// creation). A timestamp in the future counts as fresh.
+pub fn is_old(a: SystemTime, b: SystemTime, now: SystemTime, min_age: Duration) -> bool {
+    match now.duration_since(a.max(b)) {
+        Ok(age) => age >= min_age,
+        Err(_) => false,
+    }
+}
+
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "package.json",
+    "Cargo.toml",
+    "pyproject.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Gemfile",
+    "composer.json",
+    "Makefile",
+];
+const PROJECT_MARKER_EXTENSIONS: &[&str] = &["sln", "csproj"];
+
+/// A directory that directly contains one of these is a project (catalog
+/// denylist) and is never acted on.
+pub fn is_project_marker(name: &OsStr) -> bool {
+    if PROJECT_MARKERS.iter().any(|m| name == OsStr::new(m)) {
+        return true;
+    }
+    let path = Path::new(name);
+    path.file_stem().is_some_and(|stem| !stem.is_empty())
+        && path.extension().is_some_and(|ext| {
+            PROJECT_MARKER_EXTENSIONS
+                .iter()
+                .any(|m| ext == OsStr::new(m))
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PathRejection {
+    #[error("the path does not exist")]
+    Missing,
+    #[error("the path resolves outside its allowed root")]
+    Escapes,
+}
+
+/// Resolves `..` and links in the parent of `path` (not in its last
+/// component, which is never followed) and checks that the result is strictly
+/// inside `root`.
+pub fn contained_in(root: &Path, path: &Path) -> Result<PathBuf, PathRejection> {
+    let root = fs::canonicalize(root).map_err(|_| PathRejection::Missing)?;
+    let resolved = match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => fs::canonicalize(parent)
+            .map_err(|_| PathRejection::Missing)?
+            .join(name),
+        // Ends in `..` or is a root: resolve it whole.
+        _ => fs::canonicalize(path).map_err(|_| PathRejection::Missing)?,
+    };
+    if resolved != root && resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        Err(PathRejection::Escapes)
+    }
+}
+
+/// Who must own the entries under a temp root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerRule {
+    /// The root itself must belong to the user (macOS, Windows, `~/.cache/tmp`).
+    Root,
+    /// A shared root such as Ubuntu `/tmp`: each entry's owner is checked.
+    PerEntry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum RootRejection {
+    #[error("the temporary folder does not exist")]
+    Missing,
+    #[error("the temporary folder could not be read")]
+    Unreadable,
+    #[error("the temporary folder is not a folder")]
+    NotADirectory,
+    #[error("the temporary folder is the top of a disk")]
+    FilesystemRoot,
+    #[error("the temporary folder is outside the system's per-user temporary area")]
+    OutsideSystemTempArea,
+    #[error("the temporary folder is your home folder or contains it")]
+    HomeOrAncestor,
+    #[error("the temporary folder is inside a protected folder")]
+    InsideProtectedFolder,
+    #[error("the temporary folder contains a protected folder")]
+    ContainsProtectedFolder,
+    #[error("the temporary folder belongs to another user")]
+    NotOwnedByUser,
+}
+
+/// A temp root that passed validation. Only [`validate_temp_root`] makes
+/// one, so the walker cannot be pointed at an arbitrary path.
+#[derive(Debug, Clone)]
+pub struct ValidRoot {
+    path: PathBuf,
+    id: FileId,
+    owner: OwnerRule,
+}
+
+impl ValidRoot {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn id(&self) -> FileId {
+        self.id
+    }
+
+    pub fn owner_rule(&self) -> OwnerRule {
+        self.owner
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Protected {
+    path: PathBuf,
+    id: Option<FileId>,
+}
+
+/// What a scan may and may not touch: the home, protected folders, temp
+/// roots, the clock, and the user. Built by [`crate::platform::resolve_context`].
+#[derive(Debug, Clone)]
+pub struct Context {
+    home: PathBuf,
+    protected: Vec<Protected>,
+    temp_roots: Vec<(PathBuf, OwnerRule)>,
+    required_temp_area: Option<PathBuf>,
+    now: SystemTime,
+    #[cfg(unix)]
+    euid: u32,
+}
+
+impl Context {
+    pub(crate) fn new(
+        home: PathBuf,
+        protected: impl IntoIterator<Item = PathBuf>,
+        temp_roots: Vec<(PathBuf, OwnerRule)>,
+        required_temp_area: Option<PathBuf>,
+    ) -> Self {
+        let home = fs::canonicalize(&home).unwrap_or(home);
+        let mut ctx = Self {
+            home,
+            protected: Vec::new(),
+            temp_roots,
+            required_temp_area,
+            now: SystemTime::now(),
+            #[cfg(unix)]
+            // SAFETY: geteuid has no preconditions and cannot fail.
+            euid: unsafe { libc::geteuid() },
+        };
+        for path in protected {
+            ctx.add_protected(path);
+        }
+        ctx
+    }
+
+    /// A context for a fixture home: the standard protected folders under
+    /// `home` and its `user-dirs.dirs`, no temp roots, the real clock.
+    #[doc(hidden)]
+    pub fn for_fixture(home: &Path) -> Self {
+        let protected = crate::platform::protected_under_home(home);
+        Self::new(home.to_path_buf(), protected, Vec::new(), None)
+    }
+
+    #[doc(hidden)]
+    pub fn with_now(mut self, now: SystemTime) -> Self {
+        self.now = now;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_temp_root(mut self, path: PathBuf, owner: OwnerRule) -> Self {
+        self.temp_roots.push((path, owner));
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_protected(mut self, path: PathBuf) -> Self {
+        self.add_protected(path);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_required_temp_area(mut self, path: PathBuf) -> Self {
+        self.required_temp_area = Some(fs::canonicalize(&path).unwrap_or(path));
+        self
+    }
+
+    #[cfg(unix)]
+    #[doc(hidden)]
+    pub fn with_euid(mut self, euid: u32) -> Self {
+        self.euid = euid;
+        self
+    }
+
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    pub fn temp_roots(&self) -> &[(PathBuf, OwnerRule)] {
+        &self.temp_roots
+    }
+
+    pub fn now(&self) -> SystemTime {
+        self.now
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn euid(&self) -> u32 {
+        self.euid
+    }
+
+    fn add_protected(&mut self, path: PathBuf) {
+        let path = fs::canonicalize(&path).unwrap_or(path);
+        let id = measure::file_id(&path).ok();
+        self.protected.push(Protected { path, id });
+    }
+
+    pub(crate) fn is_protected_id(&self, id: FileId) -> bool {
+        self.protected.iter().any(|p| p.id == Some(id))
+    }
+
+    /// True if `path`, or any folder above it, is a protected folder. Compared
+    /// by file identity, so `~/documents` matches `~/Documents` on a
+    /// case-insensitive volume.
+    pub fn is_protected(&self, path: &Path) -> bool {
+        let resolved = resolve_existing(path);
+        if resolved
+            .ancestors()
+            .any(|a| measure::file_id(a).is_ok_and(|id| self.is_protected_id(id)))
+        {
+            return true;
+        }
+        // Protected folders that do not exist yet are matched by path.
+        self.protected
+            .iter()
+            .any(|p| p.id.is_none() && resolved.starts_with(&p.path))
+    }
+}
+
+/// Canonicalizes the longest existing prefix of `path` and appends the rest.
+fn resolve_existing(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(found) = fs::canonicalize(current) {
+            return missing.iter().rev().fold(found, |acc, part| acc.join(part));
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                current = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Checks a temp root against the catalog `user-temp` root rules. Failure
+/// skips the row with the reason; there is no fallback guess.
+pub fn validate_temp_root(
+    ctx: &Context,
+    path: &Path,
+    owner: OwnerRule,
+) -> Result<ValidRoot, RootRejection> {
+    let canonical = fs::canonicalize(path).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => RootRejection::Missing,
+        _ => RootRejection::Unreadable,
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|_| RootRejection::Unreadable)?;
+    if !metadata.is_dir() {
+        return Err(RootRejection::NotADirectory);
+    }
+    if canonical.parent().is_none() {
+        return Err(RootRejection::FilesystemRoot);
+    }
+    if let Some(area) = &ctx.required_temp_area {
+        if !canonical.starts_with(area) {
+            return Err(RootRejection::OutsideSystemTempArea);
+        }
+    }
+    let id = measure::file_id(&canonical).map_err(|_| RootRejection::Unreadable)?;
+    let same = |a: &Path| measure::file_id(a).is_ok_and(|other| other == id);
+    if ctx.home.ancestors().any(same) {
+        return Err(RootRejection::HomeOrAncestor);
+    }
+    if ctx.is_protected(&canonical) {
+        return Err(RootRejection::InsideProtectedFolder);
+    }
+    if ctx
+        .protected
+        .iter()
+        .filter(|p| p.id.is_some())
+        .any(|p| p.path.ancestors().any(same))
+    {
+        return Err(RootRejection::ContainsProtectedFolder);
+    }
+    if owner == OwnerRule::Root && !crate::platform::owned_by_user(ctx, &canonical, &metadata) {
+        return Err(RootRejection::NotOwnedByUser);
+    }
+    Ok(ValidRoot {
+        path: canonical,
+        id,
+        owner,
+    })
+}
