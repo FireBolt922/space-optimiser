@@ -1,0 +1,65 @@
+# Planning documents stay on this machine. They are not part of the
+# application and are not committed by a normal git add.
+# This does not untrack files that are already committed.
+/develop-eggs/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Rust
+target/
+**/*.rs.bk
+# Commit Cargo.lock. This is an application, not a library.
+
+# Node.js and the TypeScript UI
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.pnp.*
+*.tsbuildinfo
+.vite/
+dist/
+.turbo/
+.eslintcache
+
+# Tauri and installer output
+src-tauri/target/
+src-tauri/WixTools/
+bundle/
+*.dmg
+*.pkg
+*.msi
+*.msix
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.snap
+
+# Tests, coverage, and local debug output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+
+# Editors, OS, and local app data
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+tmp/
+.cache/
