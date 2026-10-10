@@ -106,10 +106,26 @@ describe("results", () => {
     expect(screen.getByText("Not sure — not offered")).toBeTruthy();
   });
 
+  // Phase 5 test 8: a running browser's cache cannot be selected.
+  it("a browser that is open is shown as quit first and cannot be selected", async () => {
+    await toResults();
+    const firefox = box("Firefox — abcd.default");
+    expect(firefox.disabled).toBe(true);
+    expect(screen.getByText("Quit the browser first")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
+    expect(firefox.checked).toBe(false);
+  });
+
+  // Phase 5 item 9.
+  it("shows how long the scan took", async () => {
+    await toResults();
+    expect(screen.getByText(/Scan took 0\.2 seconds/)).toBeTruthy();
+  });
+
   it("risk is shown as a word, and skipped entries show their reason", async () => {
     await toResults();
     expect(screen.getAllByText("Low").length).toBeGreaterThan(0);
-    expect(screen.getByText("Medium")).toBeTruthy();
+    expect(screen.getAllByText("Medium").length).toBeGreaterThan(0);
     expect(screen.getByText("Info")).toBeTruthy();
     expect(screen.getByText(/it changed within the last day/)).toBeTruthy();
   });

@@ -7,11 +7,11 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audit::{self, Audit};
 use crate::clock::{Clock, PLAN_LIFETIME, Stamp, SystemClock};
-use crate::discover::{self, CancelToken, Progress, RootOutcome, ScanError, TempScan};
+use crate::discover::{self, CancelToken, NormalScan, Progress, RootOutcome, ScanError};
 use crate::execute::{self, Measure, PlanEntry};
 use crate::model::{
     Action, BuildPlanArgs, Candidate, ConfirmationToken, ExecutePlanArgs, ExecuteStart,
@@ -150,7 +150,7 @@ impl Engine {
     /// Starts a scan on a worker thread. A new scan cancels the previous
     /// one and discards its plans.
     pub fn start_scan(&self, args: StartScanArgs) -> Result<ScanId> {
-        // Both modes cover `user-temp` until M4 and M5 add their rows.
+        // Both modes run the Normal Scan rows until M5 adds the Deep rows.
         let _ = args.mode;
         let mut state = self.state();
         if state.running.is_some() {
@@ -172,6 +172,7 @@ impl Engine {
                     files_seen: 0,
                     bytes_seen: 0,
                 },
+                duration_ms: 0,
                 error: None,
                 candidates: Vec::new(),
                 skipped: Vec::new(),
@@ -414,10 +415,11 @@ impl Engine {
     }
 
     fn run_scan(&self, scan_id: ScanId, cancel: &CancelToken) {
+        let started = Instant::now();
         let result = (self.0.config.context)()
             .map_err(|e| EngineError::Context(e.to_string()).to_string())
             .and_then(|ctx| {
-                discover::scan_user_temp(&ctx, cancel, |progress| {
+                discover::scan_normal(&ctx, cancel, |progress| {
                     self.update_scan(scan_id, |view| view.progress = progress);
                 })
                 .map_err(|e| match e {
@@ -425,8 +427,10 @@ impl Engine {
                     ScanError::RunningAsRoot => e.to_string(),
                 })
             });
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.update_scan(scan_id, |view| match result {
             Ok(scan) => {
+                view.duration_ms = duration_ms;
                 view.status = ScanStatus::Finished;
                 fill(view, scan);
             }
@@ -494,10 +498,10 @@ fn scan_slot(state: &State, scan_id: ScanId) -> Result<&ScanSlot> {
         .ok_or(EngineError::UnknownScan)
 }
 
-fn fill(view: &mut ScanView, scan: TempScan) {
+fn fill(view: &mut ScanView, scan: NormalScan) {
     view.progress = scan.progress;
     let label = CatalogId::UserTemp.location_label();
-    for root in scan.roots {
+    for root in scan.temp {
         match root {
             RootOutcome::Skipped { reason, .. } => view.roots.push(RootView {
                 location_label: label,
@@ -525,4 +529,11 @@ fn fill(view: &mut ScanView, scan: TempScan) {
             }
         }
     }
+    view.candidates.extend(scan.caches);
+    view.skipped
+        .extend(scan.cache_skipped.into_iter().map(|s| SkippedView {
+            detail: s.reason.to_string(),
+            display_name: s.display_name,
+            reason: s.reason,
+        }));
 }

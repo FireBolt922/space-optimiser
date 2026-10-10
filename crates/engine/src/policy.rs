@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
@@ -207,6 +208,16 @@ impl CatalogId {
         }
     }
 
+    /// The age gate in the catalog entry rules. Cache rows have none: the
+    /// whole folder is regenerable.
+    pub const fn min_age(self) -> Option<Duration> {
+        match self {
+            CatalogId::UserTemp => Some(TEMP_MIN_AGE),
+            CatalogId::UserLogsOld => Some(LOG_MIN_AGE),
+            _ => None,
+        }
+    }
+
     pub const fn location_label(self) -> &'static str {
         match self {
             CatalogId::UserTemp => "Temporary files",
@@ -223,6 +234,9 @@ impl CatalogId {
 
 /// `user-temp` entries must be older than this (catalog `user-temp`).
 pub const TEMP_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// `user-logs-old` files must be older than this (catalog `user-logs-old`).
+pub const LOG_MIN_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Age is the newest of the two timestamps (`mtime`/`ctime`, or last-write/
 /// creation). A timestamp in the future counts as fresh.
@@ -268,12 +282,17 @@ pub enum SkipReason {
     /// Crosses into another filesystem.
     #[error("part of it is on another disk")]
     OtherFilesystem,
+    /// A cache folder whose real location is not inside the home folder.
+    #[error("it is outside your home folder")]
+    OutsideHome,
 }
 
-/// The catalog `user-temp` entry rules, applied to the entry and to every
+/// The catalog entry rules for `row`, applied to an entry and to every
 /// descendant. The scanner and the executor both call this, so a rule
 /// cannot hold at scan time and be forgotten at delete time (phase 8 item 3).
-pub(crate) fn temp_entry_rule(
+/// Rows differ only in the age gate ([`CatalogId::min_age`]).
+pub(crate) fn entry_rule(
+    row: CatalogId,
     ctx: &Context,
     facts: &Facts,
     root_device: Option<u64>,
@@ -294,8 +313,10 @@ pub(crate) fn temp_entry_rule(
     if facts.locked {
         return Some(SkipReason::Locked);
     }
-    if !is_old(facts.times.0, facts.times.1, ctx.now(), TEMP_MIN_AGE) {
-        return Some(SkipReason::Fresh);
+    if let Some(min_age) = row.min_age() {
+        if !is_old(facts.times.0, facts.times.1, ctx.now(), min_age) {
+            return Some(SkipReason::Fresh);
+        }
     }
     if facts.kind == Kind::Dir && ctx.is_protected_id(facts.id) {
         return Some(SkipReason::ProtectedFolder);
@@ -394,8 +415,9 @@ pub enum RootRejection {
     NotOwnedByUser,
 }
 
-/// A temp root that passed validation. Only [`validate_temp_root`] makes
-/// one, so the walker cannot be pointed at an arbitrary path.
+/// A root that passed validation. Only [`validate_temp_root`] and
+/// [`validate_cache_root`] make one, so the walker cannot be pointed at an
+/// arbitrary path.
 #[derive(Debug, Clone)]
 pub struct ValidRoot {
     path: PathBuf,
@@ -423,15 +445,34 @@ struct Protected {
     id: Option<FileId>,
 }
 
+/// Every path a scan reads or lists, for tests that prove a folder was not
+/// walked (phase 5 test 5).
+pub type VisitLog = Arc<Mutex<Vec<PathBuf>>>;
+
+/// Where the names of running processes come from.
+#[derive(Debug, Clone)]
+enum Processes {
+    /// This computer's process list.
+    System,
+    /// A fixed list, for fixtures.
+    Fixed(Arc<[String]>),
+    /// The list cannot be read.
+    Unavailable,
+}
+
 /// What a scan may and may not touch: the home, protected folders, temp
 /// roots, the clock, and the user. Built by [`crate::platform::resolve_context`].
 #[derive(Debug, Clone)]
 pub struct Context {
     home: PathBuf,
+    /// Windows Local AppData. Defaults to `home\AppData\Local`.
+    local_app_data: PathBuf,
     protected: Vec<Protected>,
     temp_roots: Vec<(PathBuf, OwnerRule)>,
     required_temp_area: Option<PathBuf>,
     now: SystemTime,
+    processes: Processes,
+    visits: Option<VisitLog>,
     #[cfg(unix)]
     euid: u32,
 }
@@ -445,11 +486,14 @@ impl Context {
     ) -> Self {
         let home = fs::canonicalize(&home).unwrap_or(home);
         let mut ctx = Self {
+            local_app_data: home.join("AppData").join("Local"),
             home,
             protected: Vec::new(),
             temp_roots,
             required_temp_area,
             now: SystemTime::now(),
+            processes: Processes::System,
+            visits: None,
             #[cfg(unix)]
             // SAFETY: geteuid has no preconditions and cannot fail.
             euid: unsafe { libc::geteuid() },
@@ -461,11 +505,48 @@ impl Context {
     }
 
     /// A context for a fixture home: the standard protected folders under
-    /// `home` and its `user-dirs.dirs`, no temp roots, the real clock.
+    /// `home` and its `user-dirs.dirs`, no temp roots, the real clock, and
+    /// no running browsers.
     #[doc(hidden)]
     pub fn for_fixture(home: &Path) -> Self {
         let protected = crate::platform::protected_under_home(home);
         Self::new(home.to_path_buf(), protected, Vec::new(), None)
+            .with_running_processes::<&str>(&[])
+    }
+
+    // Set by the Windows adapter from the Local AppData Known Folder.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn with_local_app_data(mut self, path: PathBuf) -> Self {
+        self.local_app_data = fs::canonicalize(&path).unwrap_or(path);
+        self
+    }
+
+    /// Pretends exactly these processes are running.
+    #[doc(hidden)]
+    pub fn with_running_processes<S: AsRef<str>>(mut self, names: &[S]) -> Self {
+        self.processes = Processes::Fixed(names.iter().map(|n| n.as_ref().to_owned()).collect());
+        self
+    }
+
+    /// Pretends the process list cannot be read.
+    #[doc(hidden)]
+    pub fn with_process_list_error(mut self) -> Self {
+        self.processes = Processes::Unavailable;
+        self
+    }
+
+    /// Reads this computer's process list, as production does. For the
+    /// debug fixture window.
+    #[doc(hidden)]
+    pub fn with_system_processes(mut self) -> Self {
+        self.processes = Processes::System;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_visit_log(mut self, log: VisitLog) -> Self {
+        self.visits = Some(log);
+        self
     }
 
     #[doc(hidden)]
@@ -501,6 +582,28 @@ impl Context {
 
     pub fn home(&self) -> &Path {
         &self.home
+    }
+
+    pub fn local_app_data(&self) -> &Path {
+        &self.local_app_data
+    }
+
+    /// Names of the processes running now.
+    pub(crate) fn process_names(&self) -> io::Result<Vec<String>> {
+        match &self.processes {
+            Processes::System => crate::process::names(),
+            Processes::Fixed(names) => Ok(names.to_vec()),
+            Processes::Unavailable => Err(io::Error::other("process list unavailable")),
+        }
+    }
+
+    /// Records that the scan read or listed `path`.
+    pub(crate) fn visit(&self, path: &Path) {
+        if let Some(log) = &self.visits {
+            log.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(path.to_path_buf());
+        }
     }
 
     pub fn temp_roots(&self) -> &[(PathBuf, OwnerRule)] {
@@ -608,5 +711,45 @@ pub fn validate_temp_root(
         path: canonical,
         id,
         owner,
+    })
+}
+
+/// Checks a cache folder found by [`crate::roots`]: a real folder, not a
+/// link; inside the home; not a protected folder, inside one, or above one;
+/// and owned by the user. Failure skips that folder with the reason.
+pub fn validate_cache_root(ctx: &Context, path: &Path) -> Result<ValidRoot, SkipReason> {
+    let link = fs::symlink_metadata(path).map_err(|_| SkipReason::Unreadable)?;
+    let facts = measure::facts(path, &link).map_err(|_| SkipReason::Unreadable)?;
+    match facts.kind {
+        Kind::Dir => {}
+        Kind::Link => return Err(SkipReason::Link),
+        Kind::SocketOrPipe => return Err(SkipReason::SocketOrPipe),
+        Kind::File | Kind::Device => return Err(SkipReason::SpecialFile),
+    }
+    let canonical = fs::canonicalize(path).map_err(|_| SkipReason::Unreadable)?;
+    if canonical == ctx.home || !canonical.starts_with(&ctx.home) {
+        return Err(SkipReason::OutsideHome);
+    }
+    if ctx.is_protected(&canonical) {
+        return Err(SkipReason::ProtectedFolder);
+    }
+    let id = facts.id;
+    let same = |a: &Path| measure::file_id(a).is_ok_and(|other| other == id);
+    if ctx
+        .protected
+        .iter()
+        .filter(|p| p.id.is_some())
+        .any(|p| p.path.ancestors().any(same))
+    {
+        return Err(SkipReason::ProtectedFolder);
+    }
+    let metadata = fs::metadata(&canonical).map_err(|_| SkipReason::Unreadable)?;
+    if !crate::platform::owned_by_user(ctx, &canonical, &metadata) {
+        return Err(SkipReason::OtherOwner);
+    }
+    Ok(ValidRoot {
+        path: canonical,
+        id,
+        owner: OwnerRule::Root,
     })
 }

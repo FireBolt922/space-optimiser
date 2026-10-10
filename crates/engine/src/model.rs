@@ -158,6 +158,18 @@ pub enum Label {
     Shared,
     /// Windows could not report the compressed size; this is the logical size.
     LogicalSize,
+    /// The app that uses this cache is running (catalog "quit first" rows).
+    /// The candidate's action is `none` until it quits.
+    QuitFirst,
+}
+
+/// What a candidate's delete covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// One entry directly inside the root (`user-temp`).
+    Entry,
+    /// Everything inside the root; the root folder itself stays (cache rows).
+    Contents,
 }
 
 /// A scan result (phase 4 item 7). The path and identity stay in the engine;
@@ -183,10 +195,14 @@ pub struct Candidate {
     pub(crate) path: PathBuf,
     #[serde(skip)]
     pub(crate) file_id: FileId,
-    /// The validated root the entry sits directly in.
+    /// The validated root: the folder the entry sits directly in, or the
+    /// cache folder itself for a `Contents` candidate.
     #[serde(skip)]
     pub(crate) root: ValidRoot,
-    /// Sorted identities of everything inside a directory entry.
+    #[serde(skip)]
+    pub(crate) scope: Scope,
+    /// Sorted identities of everything inside a directory entry, or inside
+    /// the cache folder.
     #[serde(skip)]
     pub(crate) members: Arc<[FileId]>,
 }
@@ -236,6 +252,8 @@ pub struct ScanView {
     pub scan_id: ScanId,
     pub status: ScanStatus,
     pub progress: Progress,
+    /// How long the scan took, once it stops running (phase 5 item 9).
+    pub duration_ms: u64,
     pub error: Option<String>,
     pub candidates: Vec<Candidate>,
     pub skipped: Vec<SkippedView>,
@@ -297,6 +315,13 @@ pub enum SkipCause {
     Gone,
     #[error("this cleanup is not in this build")]
     NotInThisBuild,
+    /// A "quit first" row whose app is running now.
+    #[error("the browser is open. Quit it, then scan again")]
+    BrowserRunning,
+    /// The process list could not be read, so a running browser cannot be
+    /// ruled out.
+    #[error("could not check whether the browser is open")]
+    BrowserCheckFailed,
     #[error("{0}")]
     Entry(SkipReason),
     #[error("{0}")]

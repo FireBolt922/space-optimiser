@@ -79,8 +79,10 @@ fn engine(audit_dir: PathBuf) -> Engine {
 }
 
 /// The fixture clock runs two days ahead, so files the script just copied
-/// count as old and a file it dated two days ahead counts as new. The audit
-/// log goes next to the fixture home, not into the real app data.
+/// count as old and a file it dated two days ahead counts as new. Running
+/// browsers are read from this computer, so an open browser shows its
+/// fixture cache as "quit first". The audit log goes next to the fixture
+/// home, not into the real app data.
 #[cfg(debug_assertions)]
 fn fixture_engine(home: PathBuf) -> Engine {
     use space_optimiser_engine::Config;
@@ -93,7 +95,8 @@ fn fixture_engine(home: PathBuf) -> Engine {
         move || {
             Ok(Context::for_fixture(&home)
                 .with_now(SystemTime::now() + Duration::from_secs(2 * 24 * 60 * 60))
-                .with_temp_root(home.join("tmp"), OwnerRule::Root))
+                .with_temp_root(home.join("tmp"), OwnerRule::Root)
+                .with_system_processes())
         },
         audit_dir,
     ))

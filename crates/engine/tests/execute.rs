@@ -716,6 +716,187 @@ mod unix {
         assert_eq!(result, Err(EngineError::RunningAsRoot));
         assert!(home.path("tmp/old-download.bin").exists());
     }
+
+    // Phase 5 and phase 8 item 3 for cache rows: the folder is emptied, the
+    // folder itself and every profile file next to it stay.
+    #[test]
+    fn a_confirmed_browser_cache_is_emptied_and_the_profile_kept() {
+        let home = common::basic_home();
+        let engine = home.engine();
+        let report = common::clean(&engine, &[common::CHROME_CACHE]);
+
+        let done = item(&report, common::CHROME_CACHE);
+        assert_eq!(done.outcome, Outcome::Removed, "{done:?}");
+        assert!(done.bytes_removed > 0);
+        assert_eq!(
+            done.recovery_text,
+            Some("Those sites will load from the network next time.")
+        );
+        let cache = home.chrome_cache();
+        assert!(cache.is_dir(), "the cache folder itself stays");
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+        assert!(home.chrome_profile().join("Cookies").is_file());
+        assert!(
+            cache
+                .with_file_name("Code Cache")
+                .join("js/index")
+                .is_file()
+        );
+        let log = audit_log(&home);
+        assert!(
+            log.contains("\"catalog_id\":\"browser-http-cache\""),
+            "{log}"
+        );
+        assert!(log.contains("\"outcome\":\"removed\""), "{log}");
+    }
+
+    #[test]
+    fn a_running_browser_cannot_be_planned() {
+        let home = common::basic_home();
+        let engine = Engine::new(
+            home.config_with(|ctx| ctx.with_running_processes(&[common::chrome_process()])),
+        );
+        let view = common::scan(&engine);
+        let result = engine.build_plan(space_optimiser_engine::model::BuildPlanArgs {
+            scan_id: view.scan_id,
+            candidate_ids: vec![common::named(&view, common::CHROME_CACHE).id],
+        });
+        assert_eq!(result.unwrap_err(), EngineError::NotActionable);
+    }
+
+    // Test 8 at execute time: the browser opened between confirm and run.
+    #[test]
+    fn a_browser_opened_after_the_scan_keeps_its_cache() {
+        let home = common::basic_home();
+        let running: Arc<Mutex<Vec<String>>> = Arc::default();
+        let shared = running.clone();
+        let engine = Engine::new(
+            home.config_with(move |ctx| ctx.with_running_processes(&shared.lock().unwrap())),
+        );
+        let view = common::scan(&engine);
+        let plan = common::plan(&engine, &view, &[common::CHROME_CACHE]);
+        let token = common::confirm(&engine, &plan);
+        running
+            .lock()
+            .unwrap()
+            .push(common::chrome_process().to_owned());
+
+        let report = common::execute(&engine, &plan, token);
+
+        assert_eq!(
+            skipped(&report, common::CHROME_CACHE),
+            SkipCause::BrowserRunning
+        );
+        assert!(home.chrome_cache().join("Cache_Data/f_000001").is_file());
+    }
+
+    #[test]
+    fn a_browser_cache_is_kept_when_processes_cannot_be_listed() {
+        let home = common::basic_home();
+        let broken = Arc::new(Mutex::new(false));
+        let flag = broken.clone();
+        let engine = Engine::new(home.config_with(move |ctx| {
+            if *flag.lock().unwrap() {
+                ctx.with_process_list_error()
+            } else {
+                ctx
+            }
+        }));
+        let view = common::scan(&engine);
+        let plan = common::plan(&engine, &view, &[common::CHROME_CACHE]);
+        let token = common::confirm(&engine, &plan);
+        *broken.lock().unwrap() = true;
+
+        let report = common::execute(&engine, &plan, token);
+
+        assert_eq!(
+            skipped(&report, common::CHROME_CACHE),
+            SkipCause::BrowserCheckFailed
+        );
+        assert!(home.chrome_cache().join("Cache_Data/f_000001").is_file());
+    }
+
+    // Only entries in the scan snapshot are eligible (phase 8 item 3).
+    #[test]
+    fn a_file_added_to_a_cache_after_the_scan_skips_the_cache() {
+        let home = common::basic_home();
+        let engine = home.engine();
+        let view = common::scan(&engine);
+        let plan = common::plan(&engine, &view, &[common::CHROME_CACHE]);
+        let token = common::confirm(&engine, &plan);
+        let added = home.chrome_cache().join("Cache_Data/f_000099");
+        fs::write(&added, b"new").unwrap();
+
+        let report = common::execute(&engine, &plan, token);
+
+        assert_eq!(
+            skipped(&report, common::CHROME_CACHE),
+            SkipCause::ChangedSinceScan
+        );
+        assert!(added.is_file());
+        assert!(home.chrome_cache().join("Cache_Data/f_000001").is_file());
+    }
+
+    // Test 1 for cache rows: the folder swapped for a link to Documents.
+    #[test]
+    fn a_cache_swapped_for_a_link_after_planning_deletes_nothing() {
+        let home = common::basic_home();
+        let engine = home.engine();
+        let view = common::scan(&engine);
+        let plan = common::plan(&engine, &view, &[common::CHROME_CACHE]);
+        let token = common::confirm(&engine, &plan);
+        let cache = home.chrome_cache();
+        let moved = cache.with_file_name("Cache-moved");
+        fs::rename(&cache, &moved).unwrap();
+        std::os::unix::fs::symlink(home.path("Documents"), &cache).unwrap();
+
+        let report = common::execute(&engine, &plan, token);
+
+        assert_eq!(
+            skipped(&report, common::CHROME_CACHE),
+            SkipCause::ChangedSinceScan
+        );
+        assert!(home.path("Documents/notes.txt").is_file());
+        assert!(moved.join("Cache_Data/f_000001").is_file());
+    }
+
+    // A link inside a cache is removed, never followed.
+    #[test]
+    fn a_link_inside_a_cache_is_removed_and_its_target_kept() {
+        let home = common::basic_home();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("keep.txt");
+        fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, home.chrome_cache().join("link")).unwrap();
+        let engine = home.engine();
+
+        let report = common::clean(&engine, &[common::CHROME_CACHE]);
+
+        assert_eq!(
+            item(&report, common::CHROME_CACHE).outcome,
+            Outcome::Removed
+        );
+        assert!(fs::symlink_metadata(home.chrome_cache().join("link")).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn thumbnails_and_fonts_are_emptied_and_font_files_kept() {
+        let home = common::basic_home();
+        let engine = home.engine();
+        let report = common::clean(&engine, &["Thumbnails", "Font cache"]);
+
+        for name in ["Thumbnails", "Font cache"] {
+            assert_eq!(item(&report, name).outcome, Outcome::Removed, "{name}");
+        }
+        for folder in [".cache/thumbnails", ".cache/fontconfig"] {
+            let path = home.path(folder);
+            assert!(path.is_dir());
+            assert_eq!(fs::read_dir(&path).unwrap().count(), 0, "{folder}");
+        }
+        assert!(home.path(".local/share/fonts/FixtureSans.ttf").is_file());
+    }
 }
 
 /// The handle-relative Windows executor lands in M7 (phase 9).

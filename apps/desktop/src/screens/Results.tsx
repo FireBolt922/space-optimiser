@@ -16,6 +16,7 @@ function selectable(c: Candidate): boolean {
 }
 
 function actionWord(c: Candidate): string {
+  if (c.labels.includes("quit_first")) return "Quit the browser first";
   switch (c.action) {
     case "delete":
       return "Clean";
@@ -51,12 +52,17 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain }: Pro
     .reduce((sum, c) => sum + c.estimated_bytes, 0);
   const anySafe = scan.candidates.some((c) => c.bulk_safe && selectable(c));
   const memoryRoot = scan.roots.some((r) => r.frees_memory);
+  const quitFirst = scan.candidates.some((c) => c.labels.includes("quit_first"));
 
   return (
     <section className="screen" aria-labelledby="results-title">
       <h1 id="results-title" className="title-xl" tabIndex={-1} ref={heading}>
         Results
       </h1>
+      <p className="body-sm ink-muted">
+        Scan took {(scan.duration_ms / 1000).toFixed(1)} seconds and checked{" "}
+        {plural(scan.progress.files_seen, "file", "files")}.
+      </p>
 
       {scan.candidates.length === 0 ? (
         <p className="body">Nothing to clean in this mode</p>
@@ -70,6 +76,11 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain }: Pro
               {plural(chosen.size, "item", "items")} selected, about {formatBytes(selectedBytes)}
             </span>
           </div>
+          {quitFirst && (
+            <p className="body-sm ink-muted">
+              A browser is open, so its cache is not offered. Quit the browser, then scan again.
+            </p>
+          )}
           {leftOut > 0 && (
             <p className="body-sm ink-muted">
               {plural(leftOut, "other item was", "other items were")} left unselected. They need

@@ -15,7 +15,7 @@ export interface Candidate {
   estimated_bytes: number;
   file_count: number;
   links_not_followed: number;
-  labels: ("shared" | "logical_size")[];
+  labels: ("shared" | "logical_size" | "quit_first")[];
   risk: Risk;
   bulk_safe: boolean;
   confidence: "high" | "uncertain";
@@ -39,6 +39,7 @@ export interface ScanView {
   scan_id: number;
   status: "running" | "finished" | "cancelled" | "failed";
   progress: { files_seen: number; bytes_seen: number };
+  duration_ms: number;
   error: string | null;
   candidates: Candidate[];
   skipped: SkippedView[];
