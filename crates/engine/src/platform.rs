@@ -245,11 +245,17 @@ mod sys {
             }
         }
         let mut temp_roots = vec![(temp_path()?, OwnerRule::Root)];
-        if let Ok(local) = known_folder(&FOLDERID_LocalAppData) {
+        let local = known_folder(&FOLDERID_LocalAppData).ok();
+        if let Some(local) = &local {
             // The scan deduplicates the two roots by file identity.
             temp_roots.push((local.join("Temp"), OwnerRule::Root));
         }
-        Ok(Context::new(home, protected, temp_roots, None))
+        let ctx = Context::new(home, protected, temp_roots, None);
+        // Browser caches and Explorer's thumbnails live here (phase 5).
+        Ok(match local {
+            Some(local) => ctx.with_local_app_data(local),
+            None => ctx,
+        })
     }
 
     fn known_folder(id: &GUID) -> io::Result<PathBuf> {

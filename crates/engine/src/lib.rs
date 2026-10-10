@@ -7,7 +7,9 @@
 //! Milestone M3: `user-temp` runs end to end. A scan finds candidates, a
 //! confirmed plan is executed by [`execute`] (handle-relative, Unix first),
 //! every action is written to the audit log, and the report measures free
-//! space before and after.
+//! space before and after. Milestone M4 adds the other Normal Scan rows:
+//! browser caches (with running-browser detection), and Ubuntu thumbnail
+//! and font caches, through the same executor.
 
 mod audit;
 pub mod clock;
@@ -18,6 +20,8 @@ pub mod measure;
 pub mod model;
 pub mod platform;
 pub mod policy;
+mod process;
+pub mod roots;
 mod session;
 
 pub use session::{Config, Engine};

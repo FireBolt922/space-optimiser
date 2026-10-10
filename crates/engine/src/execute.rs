@@ -4,6 +4,10 @@
 //! entry rules. Deletion is handle-relative: the root is opened once without
 //! following links and every entry below it is reached through a directory
 //! handle, never through a full path.
+//!
+//! Two shapes of plan entry exist. A `user-temp` entry is one name directly
+//! inside the temp root, removed whole. A cache entry is the cache folder
+//! itself: everything inside it is removed and the folder stays.
 
 use std::ffi::OsString;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -17,10 +21,11 @@ use crate::clock::Stamp;
 use crate::discover::CancelToken;
 use crate::measure::FileId;
 use crate::model::{
-    Candidate, CandidateId, ConfirmationToken, FreeSpace, Outcome, PlanId, Report, ReportItem,
-    ScanId, SkipCause,
+    Candidate, CandidateId, ConfirmationToken, FreeSpace, Outcome, PlanId, Platform, Report,
+    ReportItem, ScanId, Scope, SkipCause,
 };
 use crate::policy::{self, CatalogId, Context, ValidRoot};
+use crate::roots;
 
 /// One planned entry: what the scan saw, kept in the engine.
 #[derive(Debug, Clone)]
@@ -29,8 +34,9 @@ pub(crate) struct PlanEntry {
     pub catalog_id: CatalogId,
     pub display_name: String,
     root: ValidRoot,
-    /// A single path component directly inside `root`.
-    name: OsString,
+    /// A single path component directly inside `root`, or `None` for the
+    /// contents of `root` itself.
+    name: Option<OsString>,
     file_id: FileId,
     /// Read by the Unix executor; the Windows one lands in M7.
     #[cfg_attr(windows, allow(dead_code))]
@@ -39,15 +45,27 @@ pub(crate) struct PlanEntry {
 
 impl PlanEntry {
     pub fn from_candidate(candidate: &Candidate) -> Option<Self> {
+        let name = match candidate.scope {
+            Scope::Entry => Some(candidate.path.file_name()?.to_owned()),
+            Scope::Contents => None,
+        };
         Some(Self {
             candidate_id: candidate.id,
             catalog_id: candidate.catalog_id,
             display_name: candidate.display_name.clone(),
             root: candidate.root.clone(),
-            name: candidate.path.file_name()?.to_owned(),
+            name,
             file_id: candidate.file_id,
             members: candidate.members.clone(),
         })
+    }
+
+    /// The full path, for the audit log only.
+    fn path(&self) -> std::path::PathBuf {
+        match &self.name {
+            Some(name) => self.root.path().join(name),
+            None => self.root.path().to_path_buf(),
+        }
     }
 }
 
@@ -114,7 +132,7 @@ pub(crate) fn run(
         };
         audit.action(
             entry.catalog_id,
-            &entry.root.path().join(&entry.name),
+            &entry.path(),
             done.outcome,
             done.detail.as_deref(),
             done.bytes,
@@ -219,16 +237,36 @@ impl Done {
 }
 
 fn delete_entry(ctx: &Context, entry: &PlanEntry) -> Done {
-    // Only rows with an executor here can run, whatever the plan says.
-    if entry.catalog_id != CatalogId::UserTemp {
-        return Done::skipped(SkipCause::NotInThisBuild);
-    }
-    let root = match policy::validate_temp_root(ctx, entry.root.path(), entry.root.owner_rule()) {
-        Ok(root) => root,
-        Err(reason) => return Done::skipped(SkipCause::Root(reason)),
-    };
-    if root.id() != entry.root.id() || root.path() != entry.root.path() {
-        return Done::skipped(SkipCause::ChangedSinceScan);
+    // Only rows with an executor here can run, whatever the plan says, and
+    // only in the shape the row allows.
+    match (entry.catalog_id, &entry.name) {
+        (CatalogId::UserTemp, Some(_)) => {
+            let path = entry.root.path();
+            let root = match policy::validate_temp_root(ctx, path, entry.root.owner_rule()) {
+                Ok(root) => root,
+                Err(reason) => return Done::skipped(SkipCause::Root(reason)),
+            };
+            if root.id() != entry.root.id() || root.path() != entry.root.path() {
+                return Done::skipped(SkipCause::ChangedSinceScan);
+            }
+        }
+        (CatalogId::ThumbnailCache | CatalogId::FontCache | CatalogId::BrowserHttpCache, None) => {
+            let browser = match roots::recheck(ctx, entry.catalog_id, &entry.root) {
+                Ok(browser) => browser,
+                Err(cause) => return Done::skipped(cause),
+            };
+            if let Some(browser) = browser {
+                match ctx.process_names() {
+                    Err(_) => return Done::skipped(SkipCause::BrowserCheckFailed),
+                    Ok(names) => {
+                        if roots::running_browsers(&names, Platform::CURRENT).contains(&browser) {
+                            return Done::skipped(SkipCause::BrowserRunning);
+                        }
+                    }
+                }
+            }
+        }
+        _ => return Done::skipped(SkipCause::NotInThisBuild),
     }
     sys::delete(ctx, entry)
 }
@@ -238,7 +276,7 @@ mod sys {
     use super::{Done, PlanEntry};
     use crate::measure::{self, Facts, FileId, Kind, RawStat};
     use crate::model::SkipCause;
-    use crate::policy::{self, Context, SkipReason};
+    use crate::policy::{self, CatalogId, Context, SkipReason};
     use rustix::fd::{AsFd, OwnedFd};
     use rustix::fs::{AtFlags, CWD, Dir, Mode, OFlags};
     use rustix::io::Errno;
@@ -247,18 +285,44 @@ mod sys {
     use std::os::unix::ffi::OsStrExt;
 
     pub fn delete(ctx: &Context, entry: &PlanEntry) -> Done {
+        let row = entry.catalog_id;
         let root_fd = match open_dir(CWD, entry.root.path().as_os_str()) {
             Ok(fd) => fd,
             Err(Errno::LOOP | Errno::NOTDIR) => return Done::skipped(SkipCause::ChangedSinceScan),
             Err(e) => return Done::failed(io::Error::from(e), 0),
         };
-        match fstat(&root_fd) {
-            Ok(facts) if facts.id == entry.root.id() => {}
+        let root_facts = match fstat(&root_fd) {
+            Ok(facts) if facts.id == entry.root.id() => facts,
             Ok(_) => return Done::skipped(SkipCause::ChangedSinceScan),
             Err(e) => return Done::failed(io::Error::from(e), 0),
-        }
+        };
         let device = Some(entry.root.id().device());
-        let top = match stat_at(&root_fd, &entry.name) {
+        let mut tree = Tree {
+            ctx,
+            row,
+            members: &entry.members,
+            device,
+            bytes: 0,
+            error: None,
+        };
+        let Some(name) = &entry.name else {
+            // A cache folder: empty it, keep it.
+            if entry.file_id != root_facts.id {
+                return Done::skipped(SkipCause::ChangedSinceScan);
+            }
+            if let Some(reason) = policy::entry_rule(row, ctx, &root_facts, device) {
+                return Done::skipped(SkipCause::Entry(reason));
+            }
+            if let Err(cause) = tree.verify(&root_fd) {
+                return Done::skipped(cause);
+            }
+            tree.empty(&root_fd);
+            return match tree.error {
+                Some(error) => Done::failed(error, tree.bytes),
+                None => Done::removed(tree.bytes),
+            };
+        };
+        let top = match stat_at(&root_fd, name) {
             Ok(facts) => facts,
             Err(Errno::NOENT) => return Done::skipped(SkipCause::Gone),
             Err(e) => return Done::failed(io::Error::from(e), 0),
@@ -266,27 +330,20 @@ mod sys {
         if top.id != entry.file_id {
             return Done::skipped(SkipCause::ChangedSinceScan);
         }
-        if let Some(reason) = policy::temp_entry_rule(ctx, &top, device) {
+        if let Some(reason) = policy::entry_rule(row, ctx, &top, device) {
             return Done::skipped(SkipCause::Entry(reason));
         }
         if top.kind != Kind::Dir {
             let bytes = if top.links > 1 { 0 } else { top.size.bytes };
-            return match rustix::fs::unlinkat(&root_fd, &entry.name, AtFlags::empty()) {
+            return match rustix::fs::unlinkat(&root_fd, name, AtFlags::empty()) {
                 Ok(()) => Done::removed(bytes),
                 Err(e) => Done::failed(io::Error::from(e), 0),
             };
         }
 
-        let dir_fd = match open_child(&root_fd, &entry.name, top.id) {
+        let dir_fd = match open_child(&root_fd, name, top.id) {
             Ok(fd) => fd,
             Err(cause) => return Done::skipped(cause),
-        };
-        let mut tree = Tree {
-            ctx,
-            members: &entry.members,
-            device,
-            bytes: 0,
-            error: None,
         };
         if let Err(cause) = tree.verify(&dir_fd) {
             return Done::skipped(cause);
@@ -296,7 +353,7 @@ mod sys {
         if let Some(error) = tree.error {
             return Done::failed(error, tree.bytes);
         }
-        match rustix::fs::unlinkat(&root_fd, &entry.name, AtFlags::REMOVEDIR) {
+        match rustix::fs::unlinkat(&root_fd, name, AtFlags::REMOVEDIR) {
             Ok(()) => Done::removed(tree.bytes + top.size.bytes),
             Err(e) => Done::failed(io::Error::from(e), tree.bytes),
         }
@@ -305,6 +362,8 @@ mod sys {
     /// A planned directory, walked through handles only.
     struct Tree<'a> {
         ctx: &'a Context,
+        /// Whose entry rules apply.
+        row: CatalogId,
         /// Sorted identities recorded by the scan.
         members: &'a [FileId],
         device: Option<u64>,
@@ -328,7 +387,9 @@ mod sys {
                 }
                 let facts = stat_at(dir, &name).map_err(|_| unreadable)?;
                 if facts.kind != Kind::Link {
-                    if let Some(reason) = policy::temp_entry_rule(self.ctx, &facts, self.device) {
+                    if let Some(reason) =
+                        policy::entry_rule(self.row, self.ctx, &facts, self.device)
+                    {
                         return Err(SkipCause::Entry(reason));
                     }
                 }
@@ -484,10 +545,10 @@ mod tests {
         let root = policy::validate_temp_root(&ctx, &tmp, OwnerRule::Root).unwrap();
         let entry = PlanEntry {
             candidate_id: CandidateId::new(1),
-            catalog_id: CatalogId::BrowserHttpCache,
+            catalog_id: CatalogId::LargeFilesReport,
             display_name: "cache.bin".into(),
             root,
-            name: "cache.bin".into(),
+            name: Some("cache.bin".into()),
             file_id: crate::measure::file_id(&file).unwrap(),
             members: Arc::from([]),
         };
@@ -506,6 +567,52 @@ mod tests {
         );
         assert_eq!(report.items[0].outcome, Outcome::Skipped);
         assert_eq!(report.items[0].reason, Some(SkipCause::NotInThisBuild));
+        assert!(file.exists());
+    }
+
+    // A row runs only in its own shape: a cache row never removes a single
+    // named entry, and `user-temp` never empties a whole root.
+    #[test]
+    fn a_plan_entry_in_the_wrong_shape_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap().join("home");
+        let tmp = home.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("cache.bin");
+        std::fs::write(&file, b"cache").unwrap();
+        let ctx = Context::for_fixture(&home)
+            .with_now(std::time::SystemTime::now() + Duration::from_secs(7 * 86_400))
+            .with_temp_root(tmp.clone(), OwnerRule::Root);
+        let root = policy::validate_temp_root(&ctx, &tmp, OwnerRule::Root).unwrap();
+        let entry = |catalog_id, name: Option<OsString>| PlanEntry {
+            candidate_id: CandidateId::new(1),
+            catalog_id,
+            display_name: "cache.bin".into(),
+            root: root.clone(),
+            name,
+            file_id: crate::measure::file_id(&file).unwrap(),
+            members: Arc::from([]),
+        };
+        let entries = [
+            entry(CatalogId::BrowserHttpCache, Some("cache.bin".into())),
+            entry(CatalogId::UserTemp, None),
+        ];
+        let audit = Audit::start(&dir.path().join("audit"), 2, false).unwrap();
+        let report = run(
+            &ctx,
+            PlanId::new(1),
+            &entries,
+            audit,
+            &CancelToken::new(),
+            Measure {
+                free_space: &|_| Ok(0),
+                settle: Duration::ZERO,
+            },
+            |_| {},
+        );
+        for item in &report.items {
+            assert_eq!(item.reason, Some(SkipCause::NotInThisBuild));
+        }
         assert!(file.exists());
     }
 }

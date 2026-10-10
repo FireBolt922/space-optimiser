@@ -1,6 +1,7 @@
 //! Walkers that emit unconfirmed candidates from validated catalog roots.
-//! Never deletes (phase 4). `user-temp` is the only row so far; others
-//! arrive in M4 and M5.
+//! Never deletes (phase 4). Normal Scan (phase 5) covers `user-temp` and
+//! the cache rows that [`crate::roots`] lists; Deep Scan rows arrive in M5.
+//! Normal Scan runs no tools and does not walk the home.
 
 use std::collections::HashSet;
 use std::fs;
@@ -12,9 +13,11 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::measure::{self, Facts, FileId, Kind};
-use crate::model::{Candidate, CandidateId, Confidence, Label, Platform};
+use crate::model::{Action, Candidate, CandidateId, Confidence, Label, Platform, Scope};
 pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
+use crate::roots;
+
 /// Shared cancel flag. Checked before every directory entry.
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -84,42 +87,93 @@ pub fn scan_user_temp(
     cancel: &CancelToken,
     on_progress: impl FnMut(Progress),
 ) -> std::result::Result<TempScan, ScanError> {
-    #[cfg(unix)]
-    if crate::guard::should_refuse(ctx.euid()) {
-        return Err(ScanError::RunningAsRoot);
-    }
-    let mut walk = Walk {
-        ctx,
-        cancel,
-        on_progress,
-        progress: Progress {
-            files_seen: 0,
-            bytes_seen: 0,
-        },
-        since_event: 0,
-        last_event: Instant::now(),
-        next_id: 1,
-    };
-    let mut seen = HashSet::new();
-    let mut roots = Vec::new();
-    for (path, owner) in ctx.temp_roots() {
-        let label = path.to_string_lossy().into_owned();
-        match policy::validate_temp_root(ctx, path, *owner) {
-            Err(reason) => roots.push(RootOutcome::Skipped {
-                root: label,
-                reason,
-            }),
-            Ok(root) => {
-                if seen.insert(root.id()) {
-                    roots.push(walk.root(&root)?);
-                }
-            }
-        }
-    }
+    refuse_root(ctx)?;
+    let mut walk = Walk::new(ctx, cancel, on_progress);
+    let roots = walk.temp_roots()?;
     Ok(TempScan {
         roots,
         progress: walk.progress,
     })
+}
+
+/// The Normal Scan rows that are cache folders, in display order.
+const CACHE_ROWS: [CatalogId; 4] = [
+    CatalogId::ThumbnailCache,
+    CatalogId::FontCache,
+    CatalogId::WindowsThumbcache,
+    CatalogId::BrowserHttpCache,
+];
+
+#[derive(Debug)]
+pub struct NormalScan {
+    pub temp: Vec<RootOutcome>,
+    /// One candidate per cache folder that has something in it.
+    pub caches: Vec<Candidate>,
+    /// Cache folders left alone, with the reason.
+    pub cache_skipped: Vec<Skipped>,
+    pub progress: Progress,
+}
+
+/// Normal Scan (phase 5): `user-temp`, then each cache row's folders. A
+/// browser that is running, or that cannot be ruled out, makes its rows
+/// "quit first".
+pub fn scan_normal(
+    ctx: &Context,
+    cancel: &CancelToken,
+    on_progress: impl FnMut(Progress),
+) -> std::result::Result<NormalScan, ScanError> {
+    refuse_root(ctx)?;
+    let mut walk = Walk::new(ctx, cancel, on_progress);
+    let temp = walk.temp_roots()?;
+    let running = ctx
+        .process_names()
+        .map(|names| roots::running_browsers(&names, Platform::CURRENT));
+    let mut caches = Vec::new();
+    let mut cache_skipped = Vec::new();
+    let mut seen = HashSet::new();
+    for row in CACHE_ROWS {
+        for found in roots::cache_roots(ctx, row, Platform::CURRENT) {
+            walk.check_cancel()?;
+            let root = match found.root {
+                Ok(root) => root,
+                Err(reason) => {
+                    cache_skipped.push(Skipped {
+                        display_name: found.display_name,
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            if !seen.insert(root.id()) {
+                continue;
+            }
+            let quit_first = found.browser.is_some_and(|b| match &running {
+                Ok(running) => running.contains(&b),
+                Err(_) => true,
+            });
+            match walk.cache(row, &root, found.display_name, quit_first)? {
+                Some(Ok(candidate)) => caches.push(candidate),
+                Some(Err(skipped)) => cache_skipped.push(skipped),
+                None => {}
+            }
+        }
+    }
+    Ok(NormalScan {
+        temp,
+        caches,
+        cache_skipped,
+        progress: walk.progress,
+    })
+}
+
+fn refuse_root(ctx: &Context) -> std::result::Result<(), ScanError> {
+    #[cfg(unix)]
+    if crate::guard::should_refuse(ctx.euid()) {
+        return Err(ScanError::RunningAsRoot);
+    }
+    #[cfg(not(unix))]
+    let _ = ctx;
+    Ok(())
 }
 
 struct Walk<'a, F> {
@@ -149,12 +203,131 @@ enum Verdict {
     Skip(SkipReason),
 }
 
-impl<F: FnMut(Progress)> Walk<'_, F> {
+impl<'a, F: FnMut(Progress)> Walk<'a, F> {
+    fn new(ctx: &'a Context, cancel: &'a CancelToken, on_progress: F) -> Self {
+        Walk {
+            ctx,
+            cancel,
+            on_progress,
+            progress: Progress {
+                files_seen: 0,
+                bytes_seen: 0,
+            },
+            since_event: 0,
+            last_event: Instant::now(),
+            next_id: 1,
+        }
+    }
+
+    fn temp_roots(&mut self) -> std::result::Result<Vec<RootOutcome>, ScanError> {
+        let ctx = self.ctx;
+        let mut seen = HashSet::new();
+        let mut roots = Vec::new();
+        for (path, owner) in ctx.temp_roots() {
+            let label = path.to_string_lossy().into_owned();
+            match policy::validate_temp_root(ctx, path, *owner) {
+                Err(reason) => roots.push(RootOutcome::Skipped {
+                    root: label,
+                    reason,
+                }),
+                Ok(root) => {
+                    if seen.insert(root.id()) {
+                        roots.push(self.root(&root)?);
+                    }
+                }
+            }
+        }
+        Ok(roots)
+    }
+
+    /// One cache folder, judged whole: a candidate for everything inside it,
+    /// a skip with the reason, or nothing when it is empty.
+    fn cache(
+        &mut self,
+        row: CatalogId,
+        root: &ValidRoot,
+        display_name: String,
+        quit_first: bool,
+    ) -> std::result::Result<Option<std::result::Result<Candidate, Skipped>>, ScanError> {
+        if row == CatalogId::WindowsThumbcache {
+            return Ok(self.thumbcache(root, display_name).map(Ok));
+        }
+        let device = Some(root.id().device());
+        let (facts, summary) = match self.judge(row, root.path(), device, false)? {
+            Verdict::Skip(reason) => {
+                return Ok(Some(Err(Skipped {
+                    display_name,
+                    reason,
+                })));
+            }
+            Verdict::Keep(facts, summary) => (facts, summary),
+        };
+        if summary.members.is_empty() {
+            return Ok(None);
+        }
+        let mut candidate = self.candidate(
+            row,
+            root,
+            root.path(),
+            display_name,
+            facts.id,
+            summary,
+            Scope::Contents,
+        );
+        if quit_first {
+            candidate.action = Action::None;
+            candidate.labels.push(Label::QuitFirst);
+        }
+        Ok(Some(Ok(candidate)))
+    }
+
+    /// Explorer's `thumbcache_*.db` files, summed. Shown, never cleaned.
+    fn thumbcache(&mut self, root: &ValidRoot, display_name: String) -> Option<Candidate> {
+        self.ctx.visit(root.path());
+        let mut summary = Summary {
+            files: 0,
+            bytes: 0,
+            links: 0,
+            shared: false,
+            exact: true,
+            members: Vec::new(),
+        };
+        for entry in fs::read_dir(root.path()).ok()?.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !(name.starts_with("thumbcache_") && name.ends_with(".db")) {
+                continue;
+            }
+            let Some(facts) = self.read_facts(&entry.path()) else {
+                continue;
+            };
+            if facts.kind == Kind::File {
+                summary.files += 1;
+                summary.bytes += facts.size.bytes;
+                summary.exact &= facts.size.exact;
+                self.tick(facts.size.bytes);
+            }
+        }
+        if summary.files == 0 {
+            return None;
+        }
+        Some(self.candidate(
+            CatalogId::WindowsThumbcache,
+            root,
+            root.path(),
+            display_name,
+            root.id(),
+            summary,
+            Scope::Contents,
+        ))
+    }
+
     fn root(&mut self, root: &ValidRoot) -> std::result::Result<RootOutcome, ScanError> {
         let label = root.path().to_string_lossy().into_owned();
         let mut candidates = Vec::new();
         let mut skipped = Vec::new();
         let device = Some(root.id().device());
+        self.ctx.visit(root.path());
         let entries = match fs::read_dir(root.path()) {
             Ok(entries) => entries,
             Err(_) => {
@@ -169,14 +342,20 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
             let Ok(entry) = entry else { continue };
             let path = entry.path();
             let display_name = entry.file_name().to_string_lossy().into_owned();
-            match self.top_level(&path, device)? {
+            match self.judge(CatalogId::UserTemp, &path, device, true)? {
                 Verdict::Skip(reason) => skipped.push(Skipped {
                     display_name,
                     reason,
                 }),
-                Verdict::Keep(facts, summary) => {
-                    candidates.push(self.candidate(root, &path, display_name, facts.id, summary))
-                }
+                Verdict::Keep(facts, summary) => candidates.push(self.candidate(
+                    CatalogId::UserTemp,
+                    root,
+                    &path,
+                    display_name,
+                    facts.id,
+                    summary,
+                    Scope::Entry,
+                )),
             }
         }
         Ok(RootOutcome::Scanned {
@@ -187,15 +366,17 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn candidate(
         &mut self,
+        row: CatalogId,
         root: &ValidRoot,
         path: &Path,
         display_name: String,
         file_id: FileId,
         s: Summary,
+        scope: Scope,
     ) -> Candidate {
-        let row = CatalogId::UserTemp;
         let id = CandidateId::new(self.next_id);
         self.next_id += 1;
         let mut labels = Vec::new();
@@ -226,21 +407,26 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
             path: path.to_path_buf(),
             file_id,
             root: root.clone(),
+            scope,
             members: members.into(),
         }
     }
 
-    /// Judges one top-level entry whole. A directory is read to unlimited
-    /// depth on the same filesystem, without following links.
-    fn top_level(
+    /// Judges one entry whole under `row`'s rules: a top-level temp entry,
+    /// or a cache folder. A directory is read to unlimited depth on the same
+    /// filesystem, without following links. `count_self` adds the entry's
+    /// own blocks, which a cache folder keeps.
+    fn judge(
         &mut self,
+        row: CatalogId,
         path: &Path,
         device: Option<u64>,
+        count_self: bool,
     ) -> std::result::Result<Verdict, ScanError> {
-        let Some(facts) = read_facts(path) else {
+        let Some(facts) = self.read_facts(path) else {
             return Ok(Verdict::Skip(SkipReason::Unreadable));
         };
-        if let Some(reason) = policy::temp_entry_rule(self.ctx, &facts, device) {
+        if let Some(reason) = policy::entry_rule(row, self.ctx, &facts, device) {
             return Ok(Verdict::Skip(reason));
         }
         if facts.kind != Kind::Dir {
@@ -261,7 +447,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         }
         let mut summary = Summary {
             files: 0,
-            bytes: facts.size.bytes,
+            bytes: if count_self { facts.size.bytes } else { 0 },
             links: 0,
             shared: false,
             exact: facts.size.exact,
@@ -269,6 +455,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         };
         let mut stack = vec![path.to_path_buf()];
         while let Some(dir) = stack.pop() {
+            self.ctx.visit(&dir);
             let Ok(entries) = fs::read_dir(&dir) else {
                 return Ok(Verdict::Skip(SkipReason::Unreadable));
             };
@@ -281,7 +468,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
                     return Ok(Verdict::Skip(SkipReason::Project));
                 }
                 let child = entry.path();
-                let Some(child_facts) = read_facts(&child) else {
+                let Some(child_facts) = self.read_facts(&child) else {
                     return Ok(Verdict::Skip(SkipReason::Unreadable));
                 };
                 if child_facts.kind == Kind::Link {
@@ -290,7 +477,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
                     summary.members.push(child_facts.id);
                     continue;
                 }
-                if let Some(reason) = policy::temp_entry_rule(self.ctx, &child_facts, device) {
+                if let Some(reason) = policy::entry_rule(row, self.ctx, &child_facts, device) {
                     return Ok(Verdict::Skip(reason));
                 }
                 summary.members.push(child_facts.id);
@@ -313,6 +500,12 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         Ok(Verdict::Keep(facts, summary))
     }
 
+    fn read_facts(&self, path: &Path) -> Option<Facts> {
+        self.ctx.visit(path);
+        let metadata = fs::symlink_metadata(path).ok()?;
+        measure::facts(path, &metadata).ok()
+    }
+
     fn check_cancel(&self) -> std::result::Result<(), ScanError> {
         if self.cancel.is_cancelled() {
             Err(ScanError::Cancelled)
@@ -331,11 +524,6 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
             self.last_event = Instant::now();
         }
     }
-}
-
-fn read_facts(path: &Path) -> Option<Facts> {
-    let metadata = fs::symlink_metadata(path).ok()?;
-    measure::facts(path, &metadata).ok()
 }
 
 #[cfg(target_os = "linux")]

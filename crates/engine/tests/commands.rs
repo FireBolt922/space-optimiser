@@ -6,6 +6,7 @@ mod common;
 use space_optimiser_engine::model::{
     BuildPlanArgs, CandidateId, PlanRef, RevealArgs, ScanMode, ScanRef, ScanStatus, StartScanArgs,
 };
+use space_optimiser_engine::policy::CatalogId;
 use space_optimiser_engine::{Config, Engine, EngineError};
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -24,10 +25,17 @@ fn a_scan_finds_the_fixture_candidates_and_explains_skips() {
     let mut names: Vec<_> = view
         .candidates
         .iter()
+        .filter(|c| c.catalog_id == CatalogId::UserTemp)
         .map(|c| c.display_name.as_str())
         .collect();
     names.sort();
     assert_eq!(names, ["old-build", "old-download.bin"]);
+    // The fixture's browser cache for this OS is found too (phase 5).
+    assert!(
+        view.candidates
+            .iter()
+            .any(|c| c.catalog_id == CatalogId::BrowserHttpCache)
+    );
     let skip = view
         .skipped
         .iter()
@@ -67,6 +75,7 @@ fn a_plan_lists_each_action_and_the_estimated_total() {
         plan.estimated_bytes,
         view.candidates
             .iter()
+            .filter(|c| c.catalog_id == CatalogId::UserTemp)
             .map(|c| c.estimated_bytes)
             .sum::<u64>()
     );

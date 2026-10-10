@@ -23,8 +23,12 @@ pub struct Home {
 }
 
 impl Home {
+    /// `relative` uses `/`. It is joined one component at a time, because
+    /// Windows reads `/` literally after the `\\?\` prefix of a canonical path.
     pub fn path(&self, relative: &str) -> PathBuf {
-        self.root.join(relative)
+        relative
+            .split('/')
+            .fold(self.root.clone(), |p, c| p.join(c))
     }
 
     pub fn write(&self, relative: &str, bytes: &[u8]) -> PathBuf {
@@ -57,16 +61,49 @@ impl Home {
 
     /// An engine over this home whose context clock reads `now`.
     pub fn config_at(&self, now: Arc<Mutex<SystemTime>>) -> Config {
+        self.config_with(move |ctx| ctx.with_now(*now.lock().unwrap()))
+    }
+
+    /// An engine over this home, files old, with `change` applied to every
+    /// context the engine resolves.
+    pub fn config_with(
+        &self,
+        change: impl Fn(Context) -> Context + Send + Sync + 'static,
+    ) -> Config {
         let root = self.root.clone();
         Config::new(
             move || {
-                Ok(Context::for_fixture(&root)
-                    .with_now(*now.lock().unwrap())
-                    .with_temp_root(root.join("tmp"), OwnerRule::Root))
+                Ok(change(
+                    Context::for_fixture(&root)
+                        .with_now(a_week_ahead())
+                        .with_temp_root(root.join("tmp"), OwnerRule::Root),
+                ))
             },
             self.audit_dir(),
         )
         .with_settle(Duration::ZERO)
+    }
+
+    /// This OS's Chrome `Default` HTTP cache in the fixture layout.
+    pub fn chrome_cache(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.path("Library/Caches/Google/Chrome/Default/Cache")
+        } else if cfg!(windows) {
+            self.path("AppData/Local/Google/Chrome/User Data/Default/Cache")
+        } else {
+            self.path(".cache/google-chrome/Default/Cache")
+        }
+    }
+
+    /// Where this OS keeps the fixture's Chrome `Default` profile files.
+    pub fn chrome_profile(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.path("Library/Application Support/Google/Chrome/Default")
+        } else if cfg!(windows) {
+            self.path("AppData/Local/Google/Chrome/User Data/Default")
+        } else {
+            self.path(".config/google-chrome/Default")
+        }
     }
 
     /// Files created by the test count as old (see [`Home::old_context`]).
@@ -136,6 +173,20 @@ pub fn clean(engine: &Engine, names: &[&str]) -> Report {
     let plan = plan(engine, &view, names);
     let token = confirm(engine, &plan);
     execute(engine, &plan, token)
+}
+
+/// The display name of the fixture's Chrome `Default` HTTP cache.
+pub const CHROME_CACHE: &str = "Google Chrome — Default — Cache";
+
+/// The name Chrome's main process has on this OS.
+pub fn chrome_process() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Google Chrome"
+    } else if cfg!(windows) {
+        "chrome.exe"
+    } else {
+        "chrome"
+    }
 }
 
 pub fn manual_clock() -> ManualClock {

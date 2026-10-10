@@ -59,6 +59,17 @@ export const CANDIDATES: Candidate[] = [
     action: "none",
     bulk_safe: false,
   }),
+  candidate({
+    id: 6,
+    display_name: "Firefox — abcd.default",
+    catalog_id: "browser-http-cache",
+    location_label: "Browser cache",
+    explanation: "Copies of web pages and images. Pages load from the network again.",
+    risk: "medium",
+    bulk_safe: false,
+    action: "none",
+    labels: ["quit_first"],
+  }),
 ];
 
 export function finishedScan(over: Partial<ScanView> = {}): ScanView {
@@ -66,6 +77,7 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
     scan_id: 7,
     status: "finished",
     progress: { files_seen: 12, bytes_seen: 3 * 1024 * 1024 },
+    duration_ms: 240,
     error: null,
     candidates: CANDIDATES,
     skipped: [{ display_name: "fresh.part", reason: "fresh", detail: "it changed within the last day" }],
