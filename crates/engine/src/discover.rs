@@ -1,9 +1,9 @@
 //! Walkers that emit unconfirmed candidates from validated catalog roots.
-//! Never deletes (phase 4). M2 discovers `user-temp`; other rows arrive in M4
-//! and M5. `start_scan` stays unsupported until M3 wires it to the UI.
+//! Never deletes (phase 4). `user-temp` is the only row so far; others
+//! arrive in M4 and M5.
 
 use std::collections::HashSet;
-use std::fs::{self, Metadata};
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,23 +11,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::measure::{self, FileId};
-use crate::model::{Candidate, CandidateId, Confidence, Label, Platform, ScanId, ScanMode};
+use crate::measure::{self, Facts, FileId, Kind};
+use crate::model::{Candidate, CandidateId, Confidence, Label, Platform};
+pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
-use crate::{EngineError, Result};
-
-pub(crate) fn start(_mode: ScanMode) -> Result<ScanId> {
-    Err(EngineError::Unsupported)
-}
-
-pub(crate) fn cancel(_scan: ScanId) -> Result<()> {
-    Err(EngineError::Unsupported)
-}
-
-pub(crate) fn candidates(_scan: ScanId) -> Result<Vec<Candidate>> {
-    Err(EngineError::Unsupported)
-}
-
 /// Shared cancel flag. Checked before every directory entry.
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -64,32 +51,6 @@ pub enum ScanError {
     Cancelled,
 }
 
-/// Why a top-level entry was left alone. The whole entry is skipped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkipReason {
-    /// A symlink, junction, or other reparse point. Never followed.
-    Link,
-    /// The entry or something inside it changed within the age limit.
-    Fresh,
-    /// Contains a socket or FIFO (an agent, editor, or X11 connection).
-    SocketOrPipe,
-    /// A device file.
-    SpecialFile,
-    /// Contains a project marker such as `.git`: looks like a project.
-    Project,
-    /// Something inside could not be read.
-    Unreadable,
-    /// Something inside belongs to another user.
-    OtherOwner,
-    /// Read-only (Windows) or immutable (macOS). Attributes are never cleared.
-    Locked,
-    /// Is or contains a protected folder.
-    ProtectedFolder,
-    /// Crosses into another filesystem.
-    OtherFilesystem,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Skipped {
     pub display_name: String,
@@ -112,6 +73,8 @@ pub enum RootOutcome {
 #[derive(Debug)]
 pub struct TempScan {
     pub roots: Vec<RootOutcome>,
+    /// The final counts, including files since the last progress event.
+    pub progress: Progress,
 }
 
 /// Discovers `user-temp` candidates under the context's temp roots: top-level
@@ -153,7 +116,10 @@ pub fn scan_user_temp(
             }
         }
     }
-    Ok(TempScan { roots })
+    Ok(TempScan {
+        roots,
+        progress: walk.progress,
+    })
 }
 
 struct Walk<'a, F> {
@@ -173,10 +139,13 @@ struct Summary {
     links: u64,
     shared: bool,
     exact: bool,
+    /// Everything inside the entry, links included. The executor deletes
+    /// only these.
+    members: Vec<FileId>,
 }
 
 enum Verdict {
-    Keep(Summary),
+    Keep(Facts, Summary),
     Skip(SkipReason),
 }
 
@@ -185,7 +154,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         let label = root.path().to_string_lossy().into_owned();
         let mut candidates = Vec::new();
         let mut skipped = Vec::new();
-        let device = fs::metadata(root.path()).ok().map(|m| device_of(&m));
+        let device = Some(root.id().device());
         let entries = match fs::read_dir(root.path()) {
             Ok(entries) => entries,
             Err(_) => {
@@ -205,15 +174,9 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
                     display_name,
                     reason,
                 }),
-                Verdict::Keep(summary) => match measure::file_id(&path) {
-                    Ok(file_id) => {
-                        candidates.push(self.candidate(&path, display_name, file_id, summary))
-                    }
-                    Err(_) => skipped.push(Skipped {
-                        display_name,
-                        reason: SkipReason::Unreadable,
-                    }),
-                },
+                Verdict::Keep(facts, summary) => {
+                    candidates.push(self.candidate(root, &path, display_name, facts.id, summary))
+                }
             }
         }
         Ok(RootOutcome::Scanned {
@@ -226,6 +189,7 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
 
     fn candidate(
         &mut self,
+        root: &ValidRoot,
         path: &Path,
         display_name: String,
         file_id: FileId,
@@ -241,6 +205,9 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         if !s.exact {
             labels.push(Label::LogicalSize);
         }
+        let mut members = s.members;
+        members.sort_unstable();
+        members.dedup();
         Candidate {
             id,
             catalog_id: row,
@@ -258,6 +225,8 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
             platform: Platform::CURRENT,
             path: path.to_path_buf(),
             file_id,
+            root: root.clone(),
+            members: members.into(),
         }
     }
 
@@ -268,37 +237,35 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
         path: &Path,
         device: Option<u64>,
     ) -> std::result::Result<Verdict, ScanError> {
-        let Ok(metadata) = fs::symlink_metadata(path) else {
+        let Some(facts) = read_facts(path) else {
             return Ok(Verdict::Skip(SkipReason::Unreadable));
         };
-        if is_link(&metadata) {
-            return Ok(Verdict::Skip(SkipReason::Link));
-        }
-        if let Some(reason) = self.entry_rule(path, &metadata, device) {
+        if let Some(reason) = policy::temp_entry_rule(self.ctx, &facts, device) {
             return Ok(Verdict::Skip(reason));
         }
-        let size = measure::allocated_size(path, &metadata);
-        if !metadata.is_dir() {
-            let Ok(info) = measure::entry_info(path, &metadata) else {
-                return Ok(Verdict::Skip(SkipReason::Unreadable));
-            };
-            let shared = info.links > 1;
-            let bytes = if shared { 0 } else { size.bytes };
+        if facts.kind != Kind::Dir {
+            let shared = facts.links > 1;
+            let bytes = if shared { 0 } else { facts.size.bytes };
             self.tick(bytes);
-            return Ok(Verdict::Keep(Summary {
-                files: 1,
-                bytes,
-                links: 0,
-                shared,
-                exact: size.exact,
-            }));
+            return Ok(Verdict::Keep(
+                facts,
+                Summary {
+                    files: 1,
+                    bytes,
+                    links: 0,
+                    shared,
+                    exact: facts.size.exact,
+                    members: Vec::new(),
+                },
+            ));
         }
         let mut summary = Summary {
             files: 0,
-            bytes: size.bytes,
+            bytes: facts.size.bytes,
             links: 0,
             shared: false,
-            exact: size.exact,
+            exact: facts.size.exact,
+            members: Vec::new(),
         };
         let mut stack = vec![path.to_path_buf()];
         while let Some(dir) = stack.pop() {
@@ -314,74 +281,36 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
                     return Ok(Verdict::Skip(SkipReason::Project));
                 }
                 let child = entry.path();
-                let Ok(metadata) = fs::symlink_metadata(&child) else {
+                let Some(child_facts) = read_facts(&child) else {
                     return Ok(Verdict::Skip(SkipReason::Unreadable));
                 };
-                if is_link(&metadata) {
+                if child_facts.kind == Kind::Link {
                     // Counted, never followed or sized as its target.
                     summary.links += 1;
+                    summary.members.push(child_facts.id);
                     continue;
                 }
-                if let Some(reason) = self.entry_rule(&child, &metadata, device) {
+                if let Some(reason) = policy::temp_entry_rule(self.ctx, &child_facts, device) {
                     return Ok(Verdict::Skip(reason));
                 }
-                let size = measure::allocated_size(&child, &metadata);
-                summary.exact &= size.exact;
-                if metadata.is_dir() {
-                    summary.bytes += size.bytes;
+                summary.members.push(child_facts.id);
+                summary.exact &= child_facts.size.exact;
+                if child_facts.kind == Kind::Dir {
+                    summary.bytes += child_facts.size.bytes;
                     stack.push(child);
                     continue;
                 }
-                let Ok(info) = measure::entry_info(&child, &metadata) else {
-                    return Ok(Verdict::Skip(SkipReason::Unreadable));
-                };
                 summary.files += 1;
-                if info.links > 1 {
+                if child_facts.links > 1 {
                     summary.shared = true;
                     self.tick(0);
                 } else {
-                    summary.bytes += size.bytes;
-                    self.tick(size.bytes);
+                    summary.bytes += child_facts.size.bytes;
+                    self.tick(child_facts.size.bytes);
                 }
             }
         }
-        Ok(Verdict::Keep(summary))
-    }
-
-    /// The catalog entry rules, checked on the entry and every descendant.
-    fn entry_rule(
-        &self,
-        path: &Path,
-        metadata: &Metadata,
-        device: Option<u64>,
-    ) -> Option<SkipReason> {
-        if let Some(reason) = special_kind(metadata) {
-            return Some(reason);
-        }
-        if device.is_some_and(|d| d != device_of(metadata)) {
-            return Some(SkipReason::OtherFilesystem);
-        }
-        if !owned_by_user(self.ctx, metadata) {
-            return Some(SkipReason::OtherOwner);
-        }
-        if is_locked(metadata) {
-            return Some(SkipReason::Locked);
-        }
-        match measure::age_times(metadata) {
-            Ok((a, b)) if policy::is_old(a, b, self.ctx.now(), policy::TEMP_MIN_AGE) => {}
-            Ok(_) => return Some(SkipReason::Fresh),
-            Err(_) => return Some(SkipReason::Unreadable),
-        }
-        if metadata.is_dir() {
-            match measure::entry_info(path, metadata) {
-                Ok(info) if self.ctx.is_protected_id(info.id) => {
-                    return Some(SkipReason::ProtectedFolder);
-                }
-                Ok(_) => {}
-                Err(_) => return Some(SkipReason::Unreadable),
-            }
-        }
-        None
+        Ok(Verdict::Keep(facts, summary))
     }
 
     fn check_cancel(&self) -> std::result::Result<(), ScanError> {
@@ -404,80 +333,9 @@ impl<F: FnMut(Progress)> Walk<'_, F> {
     }
 }
 
-#[cfg(unix)]
-fn is_link(metadata: &Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
-/// Symlinks, junctions, mount points, cloud placeholders, and app execution
-/// aliases are all reparse points.
-#[cfg(windows)]
-fn is_link(metadata: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(unix)]
-fn special_kind(metadata: &Metadata) -> Option<SkipReason> {
-    use std::os::unix::fs::FileTypeExt;
-    let kind = metadata.file_type();
-    if kind.is_socket() || kind.is_fifo() {
-        Some(SkipReason::SocketOrPipe)
-    } else if kind.is_block_device() || kind.is_char_device() {
-        Some(SkipReason::SpecialFile)
-    } else {
-        None
-    }
-}
-
-#[cfg(windows)]
-fn special_kind(_metadata: &Metadata) -> Option<SkipReason> {
-    None
-}
-
-#[cfg(unix)]
-fn device_of(metadata: &Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-    metadata.dev()
-}
-
-/// Windows mount points are reparse points, which are never entered.
-#[cfg(windows)]
-fn device_of(_metadata: &Metadata) -> u64 {
-    0
-}
-
-#[cfg(unix)]
-fn owned_by_user(ctx: &Context, metadata: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.uid() == ctx.euid()
-}
-
-/// Windows checks the owner of the temp root only (catalog `user-temp`).
-#[cfg(windows)]
-fn owned_by_user(_ctx: &Context, _metadata: &Metadata) -> bool {
-    true
-}
-
-#[cfg(target_os = "macos")]
-fn is_locked(metadata: &Metadata) -> bool {
-    use std::os::macos::fs::MetadataExt;
-    metadata.st_flags() & (libc::UF_IMMUTABLE | libc::SF_IMMUTABLE) != 0
-}
-
-#[cfg(target_os = "linux")]
-fn is_locked(_metadata: &Metadata) -> bool {
-    false
-}
-
-#[cfg(windows)]
-fn is_locked(metadata: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
-    // On folders the read-only bit is a shell hint, not a protection.
-    !metadata.is_dir() && metadata.file_attributes() & FILE_ATTRIBUTE_READONLY != 0
+fn read_facts(path: &Path) -> Option<Facts> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    measure::facts(path, &metadata).ok()
 }
 
 #[cfg(target_os = "linux")]
