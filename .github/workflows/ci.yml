@@ -40,17 +40,24 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       # The Tauri shell embeds the built UI, so build it before cargo.
-      - name: Build UI
+      - name: Build, lint, and test UI
         working-directory: apps/desktop
         run: |
           npm ci
+          npm run lint
+          npm test
           npm run build
 
-      - name: No delete calls outside the executor
+      # tests/hygiene.rs names these calls in order to forbid them.
+      - name: Delete calls only in the executor
         shell: bash
         run: |
-          if grep -rnE 'remove_file|remove_dir|Command::new' crates apps/desktop/src-tauri/src; then
-            echo "Delete and process calls are not allowed before the executor (milestone M3)." >&2
+          if grep -rnE --exclude=hygiene.rs 'remove_file|remove_dir|Command::new' crates apps/desktop/src-tauri/src; then
+            echo "std::fs::remove_* and process spawning are not allowed. Deletes go through the executor." >&2
+            exit 1
+          fi
+          if grep -rlE --include='*.rs' --exclude=hygiene.rs 'unlinkat|REMOVEDIR' crates apps/desktop/src-tauri/src | grep -vx 'crates/engine/src/execute.rs'; then
+            echo "Handle-relative deletes are allowed only in crates/engine/src/execute.rs." >&2
             exit 1
           fi
 

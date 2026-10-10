@@ -15,6 +15,12 @@ pub struct FileId {
     index: u64,
 }
 
+impl FileId {
+    pub(crate) fn device(self) -> u64 {
+        self.device
+    }
+}
+
 /// Allocated bytes. `exact` is false when Windows could not report the
 /// compressed size and the logical size stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,15 +60,68 @@ pub(crate) fn entry_info(path: &Path, metadata: &Metadata) -> io::Result<EntryIn
     sys::entry_info(path, metadata)
 }
 
-/// The two timestamps whose newest is the entry's age: `mtime` and `ctime`
-/// on Unix, last-write and creation time on Windows.
-pub(crate) fn age_times(metadata: &Metadata) -> io::Result<(SystemTime, SystemTime)> {
-    sys::age_times(metadata)
+/// What an entry is, as far as the catalog entry rules care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    File,
+    Dir,
+    /// A symlink, junction, or other reparse point.
+    Link,
+    // Windows reports neither through `std` metadata; its AF_UNIX sockets
+    // are reparse points, which are links here.
+    #[cfg_attr(windows, allow(dead_code))]
+    SocketOrPipe,
+    #[cfg_attr(windows, allow(dead_code))]
+    Device,
+}
+
+/// One `lstat` of an entry: everything the entry rules read. The scanner
+/// builds it from `std` metadata and the executor from `fstatat`, so both
+/// apply the same rules to the same fields.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Facts {
+    pub kind: Kind,
+    pub id: FileId,
+    pub links: u64,
+    /// The owner. Windows checks the owner of the temp root only.
+    #[cfg(unix)]
+    pub uid: u32,
+    /// Immutable (macOS) or read-only (Windows files).
+    pub locked: bool,
+    /// The two age timestamps; see [`age_times`].
+    pub times: (SystemTime, SystemTime),
+    pub size: Size,
+}
+
+/// The facts of `path` itself, from its `symlink_metadata`.
+pub(crate) fn facts(path: &Path, metadata: &Metadata) -> io::Result<Facts> {
+    sys::facts(path, metadata)
+}
+
+/// The `stat` fields the entry rules read, from `std` or from `rustix`.
+#[cfg(unix)]
+pub(crate) struct RawStat {
+    pub mode: u32,
+    pub device: u64,
+    pub inode: u64,
+    pub links: u64,
+    pub uid: u32,
+    pub blocks: u64,
+    pub mtime: (i64, i64),
+    pub ctime: (i64, i64),
+    /// `st_flags`: the immutable bits.
+    #[cfg(target_os = "macos")]
+    pub flags: u32,
+}
+
+#[cfg(unix)]
+pub(crate) fn facts_from_stat(raw: &RawStat) -> Facts {
+    sys::facts_from_stat(raw)
 }
 
 #[cfg(unix)]
 mod sys {
-    use super::{EntryInfo, FileId, Size};
+    use super::{EntryInfo, Facts, FileId, Kind, RawStat, Size};
     use std::fs::Metadata;
     use std::io;
     use std::os::unix::ffi::OsStrExt;
@@ -88,9 +147,53 @@ mod sys {
         }
     }
 
-    pub fn age_times(metadata: &Metadata) -> io::Result<(SystemTime, SystemTime)> {
-        let ctime = unix_time(metadata.ctime(), metadata.ctime_nsec());
-        Ok((metadata.modified()?, ctime))
+    pub fn facts(_path: &Path, metadata: &Metadata) -> io::Result<Facts> {
+        Ok(facts_from_stat(&RawStat {
+            mode: metadata.mode(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            links: metadata.nlink(),
+            uid: metadata.uid(),
+            blocks: metadata.blocks(),
+            mtime: (metadata.mtime(), metadata.mtime_nsec()),
+            ctime: (metadata.ctime(), metadata.ctime_nsec()),
+            #[cfg(target_os = "macos")]
+            flags: std::os::macos::fs::MetadataExt::st_flags(metadata),
+        }))
+    }
+
+    #[allow(clippy::unnecessary_cast)] // `mode_t` is u16 on macOS and u32 on Linux
+    pub fn facts_from_stat(raw: &RawStat) -> Facts {
+        let kind = match raw.mode & libc::S_IFMT as u32 {
+            m if m == libc::S_IFDIR as u32 => Kind::Dir,
+            m if m == libc::S_IFLNK as u32 => Kind::Link,
+            m if m == libc::S_IFSOCK as u32 || m == libc::S_IFIFO as u32 => Kind::SocketOrPipe,
+            m if m == libc::S_IFBLK as u32 || m == libc::S_IFCHR as u32 => Kind::Device,
+            _ => Kind::File,
+        };
+        #[cfg(target_os = "macos")]
+        let locked = raw.flags & (libc::UF_IMMUTABLE | libc::SF_IMMUTABLE) != 0;
+        #[cfg(not(target_os = "macos"))]
+        let locked = false;
+        Facts {
+            kind,
+            id: FileId {
+                device: raw.device,
+                index: raw.inode,
+            },
+            links: raw.links,
+            uid: raw.uid,
+            locked,
+            times: (
+                unix_time(raw.mtime.0, raw.mtime.1),
+                unix_time(raw.ctime.0, raw.ctime.1),
+            ),
+            // `st_blocks` is in 512-byte units on macOS and Linux.
+            size: Size {
+                bytes: raw.blocks.saturating_mul(512),
+                exact: true,
+            },
+        }
     }
 
     fn unix_time(secs: i64, nanos: i64) -> SystemTime {
@@ -118,7 +221,7 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
-    use super::{EntryInfo, FileId, Size};
+    use super::{EntryInfo, Facts, FileId, Kind, Size};
     use crate::platform::wide;
     use std::fs::{Metadata, OpenOptions};
     use std::io;
@@ -180,6 +283,36 @@ mod sys {
 
     pub fn age_times(metadata: &Metadata) -> io::Result<(SystemTime, SystemTime)> {
         Ok((metadata.modified()?, metadata.created()?))
+    }
+
+    /// Symlinks, junctions, mount points, cloud placeholders, and app
+    /// execution aliases are all reparse points. Windows checks the owner of
+    /// the temp root only (catalog `user-temp`), so `uid` is `None`.
+    pub fn facts(path: &Path, metadata: &Metadata) -> io::Result<Facts> {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+        let attributes = metadata.file_attributes();
+        let kind = if metadata.file_type().is_symlink()
+            || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            Kind::Link
+        } else if metadata.is_dir() {
+            Kind::Dir
+        } else {
+            Kind::File
+        };
+        let info = entry_info(path, metadata)?;
+        Ok(Facts {
+            kind,
+            id: info.id,
+            links: info.links,
+            // On folders the read-only bit is a shell hint, not a protection.
+            locked: kind == Kind::File && attributes & FILE_ATTRIBUTE_READONLY != 0,
+            times: age_times(metadata)?,
+            size: allocated_size(path, metadata),
+        })
     }
 
     pub fn free_space(path: &Path) -> io::Result<u64> {

@@ -80,7 +80,6 @@ p {
 .app-main {
   flex: 1;
   display: flex;
-  align-items: center;
   justify-content: center;
   padding: var(--space-8);
 }
@@ -94,10 +93,215 @@ p {
   box-shadow: var(--shadow-xs);
 }
 
-.card .title-lg {
-  margin-bottom: var(--space-2);
-}
 
 .ink-muted {
   color: var(--ink-muted);
+}
+
+/* Screens (M3). One column, read top to bottom. */
+.screen {
+  width: 100%;
+  max-width: var(--container-text);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.screen h1:focus {
+  outline: none;
+}
+
+.screen h1:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+
+.mode-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mode .button {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+
+.notice-warning {
+  border-color: var(--warning);
+  background: var(--warning-subtle);
+  color: var(--ink);
+}
+
+.warning-text strong {
+  color: var(--ink);
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.row-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.row-name input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  flex: none;
+}
+
+.row-size {
+  min-width: 72px;
+  text-align: right;
+}
+
+/* File names are attacker-controlled text: never let them break the layout. */
+.file-name {
+  overflow-wrap: anywhere;
+}
+
+.row-name .file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.toolbar,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.actions {
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.button {
+  min-height: var(--control-md);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-subtle);
+}
+
+.button-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+.button:disabled {
+  color: var(--ink-disabled);
+  border-color: var(--border);
+  background: var(--surface-subtle);
+  cursor: not-allowed;
+}
+
+.review-list {
+  gap: var(--space-3);
+}
+
+.review-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--primary);
+}
+
+.skipped summary,
+details.card summary {
+  cursor: pointer;
+}
+
+.skipped ul {
+  margin-top: var(--space-2);
+}
+
+.log {
+  max-height: 240px;
+  overflow: auto;
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.link {
+  color: var(--link);
+}
+
+.link:hover {
+  color: var(--link-hover);
 }

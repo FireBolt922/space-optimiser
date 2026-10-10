@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
-fn main() {
-    let _ = space_optimiser_engine::execute_plan(PathBuf::from("/Users/me/Documents"));
+use space_optimiser_engine::Engine;
+
+fn run(engine: &Engine) {
+    let _ = engine.execute_plan(PathBuf::from("/Users/me/Documents"));
 }
+
+fn main() {}

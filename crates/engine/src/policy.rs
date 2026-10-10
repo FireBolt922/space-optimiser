@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
-use crate::measure::{self, FileId};
+use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{Action, Risk};
 
 /// First-release catalog rows. `fixtures/catalog-mvp-ids.txt` lists the same
@@ -163,6 +163,50 @@ impl CatalogId {
         }
     }
 
+    /// The review-screen sentence for a planned item (phase 2 item 11).
+    pub const fn action_text(self) -> &'static str {
+        match self.action() {
+            Action::Delete => match self {
+                CatalogId::UserTemp => {
+                    "Delete this item from your temporary folder. Everything in it is more than a day old."
+                }
+                CatalogId::UserLogsOld => "Delete log files more than 30 days old.",
+                _ => "Delete these cache files.",
+            },
+            Action::RunTool => "Run the tool's own clean command.",
+            Action::Report | Action::None => "Nothing. Shown for information only.",
+        }
+    }
+
+    /// What to expect after a successful cleanup (phase 8 item 10).
+    pub const fn recovery_text(self) -> Option<&'static str> {
+        match self {
+            CatalogId::UserTemp => {
+                Some("Files older than a day were removed from the temporary folder.")
+            }
+            CatalogId::BrowserHttpCache => {
+                Some("Those sites will load from the network next time.")
+            }
+            CatalogId::PkgNpmCache
+            | CatalogId::PkgNpx
+            | CatalogId::PkgPnpmStore
+            | CatalogId::PkgYarnCache
+            | CatalogId::PkgPipCache
+            | CatalogId::PkgUvCache
+            | CatalogId::PkgCargoCache
+            | CatalogId::PkgGradleCaches
+            | CatalogId::PkgNugetHttp => Some("The next install will download packages again."),
+            CatalogId::DockerBuildCache => Some(
+                "The next build can be slower. Docker may need a restart before the Mac or Windows disk file shrinks.",
+            ),
+            CatalogId::UserLogsOld => Some("Log files older than 30 days were removed."),
+            CatalogId::ThumbnailCache
+            | CatalogId::WindowsThumbcache
+            | CatalogId::FontCache
+            | CatalogId::LargeFilesReport => None,
+        }
+    }
+
     pub const fn location_label(self) -> &'static str {
         match self {
             CatalogId::UserTemp => "Temporary files",
@@ -187,6 +231,76 @@ pub fn is_old(a: SystemTime, b: SystemTime, now: SystemTime, min_age: Duration) 
         Ok(age) => age >= min_age,
         Err(_) => false,
     }
+}
+
+/// Why an entry was left alone. A top-level entry is judged whole: one
+/// failing descendant skips all of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// A symlink, junction, or other reparse point. Never followed.
+    #[error("it is a link, and links are never followed")]
+    Link,
+    /// The entry or something inside it changed within the age limit.
+    #[error("it changed within the last day")]
+    Fresh,
+    /// Contains a socket or FIFO (an agent, editor, or X11 connection).
+    #[error("it holds a connection a running app may be using")]
+    SocketOrPipe,
+    /// A device file.
+    #[error("it is a device file")]
+    SpecialFile,
+    /// Contains a project marker such as `.git`: looks like a project.
+    #[error("it looks like a project folder")]
+    Project,
+    /// Something inside could not be read.
+    #[error("part of it could not be read")]
+    Unreadable,
+    /// Something inside belongs to another user.
+    #[error("part of it belongs to another user")]
+    OtherOwner,
+    /// Read-only (Windows) or immutable (macOS). Attributes are never cleared.
+    #[error("it is locked")]
+    Locked,
+    /// Is or contains a protected folder.
+    #[error("it is or contains a protected folder")]
+    ProtectedFolder,
+    /// Crosses into another filesystem.
+    #[error("part of it is on another disk")]
+    OtherFilesystem,
+}
+
+/// The catalog `user-temp` entry rules, applied to the entry and to every
+/// descendant. The scanner and the executor both call this, so a rule
+/// cannot hold at scan time and be forgotten at delete time (phase 8 item 3).
+pub(crate) fn temp_entry_rule(
+    ctx: &Context,
+    facts: &Facts,
+    root_device: Option<u64>,
+) -> Option<SkipReason> {
+    match facts.kind {
+        Kind::Link => return Some(SkipReason::Link),
+        Kind::SocketOrPipe => return Some(SkipReason::SocketOrPipe),
+        Kind::Device => return Some(SkipReason::SpecialFile),
+        Kind::File | Kind::Dir => {}
+    }
+    if root_device.is_some_and(|d| d != facts.id.device()) {
+        return Some(SkipReason::OtherFilesystem);
+    }
+    #[cfg(unix)]
+    if facts.uid != ctx.euid() {
+        return Some(SkipReason::OtherOwner);
+    }
+    if facts.locked {
+        return Some(SkipReason::Locked);
+    }
+    if !is_old(facts.times.0, facts.times.1, ctx.now(), TEMP_MIN_AGE) {
+        return Some(SkipReason::Fresh);
+    }
+    if facts.kind == Kind::Dir && ctx.is_protected_id(facts.id) {
+        return Some(SkipReason::ProtectedFolder);
+    }
+    None
 }
 
 const PROJECT_MARKERS: &[&str] = &[

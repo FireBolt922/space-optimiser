@@ -1,6 +1,6 @@
 # Space Optimiser
 
-Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. Nothing in this repository scans a disk or deletes files yet.
+Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. The current build cleans one thing: temporary files more than a day old, on macOS and Ubuntu.
 
 The product is independent and general purpose. It is not tied to any existing project.
 
@@ -56,7 +56,7 @@ Tauri was chosen because the interface cannot use Node to delete files on its ow
 
 ## Status
 
-Policy and paths (milestone M2). The engine resolves protected folders and temp folders on macOS, Ubuntu, and Windows, and finds old temporary files in test fixtures. It measures them and deletes nothing. The window is still empty: every command it can send returns "not supported" until the first scan screen arrives. There is no delete code and no installer.
+First vertical slice (milestone M3). The window scans temporary files, shows what it found and what it left alone, and runs a confirmed cleanup. Before each delete, the engine re-checks every entry against the scan record. It deletes through directory handles and never follows a link. It writes a local audit log and reports the change in free space. Execution works on macOS and Ubuntu. On Windows it scans but does not delete yet. Other cleanups (browser caches, developer caches, logs) are not built yet. There is no installer.
 
 Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it.
 
@@ -76,9 +76,13 @@ Requirements: Rust 1.88 (pinned in `rust-toolchain.toml`), Node 24, and on Ubunt
 
 ```sh
 npm --prefix apps/desktop ci
+npm --prefix apps/desktop run lint
+npm --prefix apps/desktop test         # component tests with a fake engine
 npm --prefix apps/desktop run build    # the Tauri shell embeds the built UI
 cargo test --workspace
 npm --prefix apps/desktop run tauri dev
 ```
 
-CI runs formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows.
+To try a cleanup without touching your own files, run `scripts/fixture-home.sh`. It copies the test fixture home into a temporary folder and prints the command that points a debug build at it. Release builds ignore that setting.
+
+CI runs the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows.

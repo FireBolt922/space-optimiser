@@ -58,3 +58,52 @@ fn test_sources_do_not_name_real_home_or_temp_paths() {
     }
     assert!(checked >= 5);
 }
+
+// Phase 8 test 19: delete calls live only in the executor, and nothing uses
+// the path-based `std::fs::remove_*` family (CVE-2022-21658, junctions).
+#[test]
+fn delete_calls_live_only_in_the_executor() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources = [
+        manifest.join("src"),
+        manifest.join("tests"),
+        manifest.join("../../apps/desktop/src-tauri/src"),
+    ];
+    let never = [
+        "remove_dir_all",
+        "remove_file",
+        "remove_dir",
+        "Command::new",
+    ];
+    let executor_only = ["unlinkat", "AtFlags::REMOVEDIR"];
+    let mut executor_deletes = 0;
+    let mut stack: Vec<_> = sources.into_iter().collect();
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") || path.ends_with("tests/hygiene.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            let is_executor = path.ends_with("src/execute.rs");
+            for needle in never {
+                assert!(!text.contains(needle), "{} uses {needle}", path.display());
+            }
+            for needle in executor_only {
+                if is_executor {
+                    executor_deletes += text.matches(needle).count();
+                } else {
+                    assert!(!text.contains(needle), "{} uses {needle}", path.display());
+                }
+            }
+        }
+    }
+    assert!(
+        executor_deletes > 0,
+        "the executor's delete calls were not found"
+    );
+}
