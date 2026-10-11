@@ -100,5 +100,6 @@ or deleted.
 
 ## Releases
 
-Maintainers release by hand: `scripts/bump-version.sh`, a PR, then the
-Release workflow from `main`. See the README.
+Maintainers run the Release workflow from `main`, which opens a version
+pull request; merging it builds and publishes the installers. See the
+README.

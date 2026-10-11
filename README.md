@@ -102,15 +102,15 @@ CI runs on every pull request and on `main`: the UI lint and tests, formatting, 
 
 ## Releasing
 
-Releases are built only by hand, never on a push.
+Releases start from the Actions tab, never from a push to `main`.
 
-1. Set the version (`MAJOR.MINOR.PATCH`, numbers only) with `scripts/bump-version.sh 0.2.0`, and merge it to main through a pull request.
-2. Wait for CI on main to go green.
-3. In GitHub, open Actions → Release → Run workflow on `main`, and pick a channel: `prerelease` for testers, `draft` to check the page first, or `release`.
+1. Open Actions → Release → Run workflow on `main`. Leave `bump` on `auto` (a feature since the last tag raises the minor version, a fix the patch version) or pick the part to raise, and pick a channel: `prerelease` for testers, `draft` to check the page first, or `release`.
+2. The workflow raises the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and `package-lock.json`, moves the **Unreleased** entries of `CHANGELOG.md` into a dated section, and opens a pull request `chore(release): vX.Y.Z` with CI running on it.
+3. Merge that pull request when CI is green. The Publish workflow then builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, creates the `vX.Y.Z` tag, and publishes the release page with the changelog section and a `SHA256SUMS.txt`.
 
-The workflow refuses to run if the version is already tagged or CI has not passed on that commit. It builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, then creates the `v<version>` tag and release page with a `SHA256SUMS.txt`. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md).
+The workflows refuse a version that is already tagged, a commit whose CI has not passed, and a changelog with nothing under **Unreleased**. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md). To retry a build that failed after the merge, run Actions → Publish → Run workflow on `main`.
 
-Every release adds a section to [CHANGELOG.md](CHANGELOG.md).
+The Release workflow opens pull requests, so Settings → Actions → General → Workflow permissions must allow GitHub Actions to create and approve pull requests.
 
 ## Licence
 

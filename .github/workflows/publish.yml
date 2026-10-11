@@ -1,0 +1,268 @@
+name: Publish
+
+# Builds installers for macOS, Ubuntu, and Windows, tags the commit, and
+# creates the release page. It starts by itself when a release pull
+# request (opened by the Release workflow) is merged into main. Run it by
+# hand on main to retry a release that did not finish; the tag is created
+# only at the end, so a failed run leaves nothing behind.
+#
+# Builds are unsigned: signing needs certificates that are not in this
+# repository.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: >-
+          prerelease: test build for testers (marked "Pre-release").
+          release: public release. draft: only you can see it.
+        type: choice
+        options: [prerelease, draft, release]
+        default: prerelease
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: check version and CI
+    # On a push, only the commit from a release pull request.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Run the Publish workflow from main, not ${GITHUB_REF}." >&2
+          exit 1
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Cargo.toml version '$version' is not MAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          package=$(node -p 'require("./apps/desktop/package.json").version')
+          if [ "$package" != "$version" ]; then
+            echo "package.json is $package but Cargo.toml is $version. Run scripts/bump-version.sh." >&2
+            exit 1
+          fi
+          scripts/changelog-section.sh "$version" >/dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The tag is new
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null; then
+            echo "v${VERSION} is already released. Run the Release workflow to start the next version." >&2
+            exit 1
+          fi
+
+      # A release never ships a commit whose tests failed. Right after a
+      # merge, the CI run on main has only just started, but the ruleset
+      # let the pull request merge only with green CI on its last commit
+      # while up to date with main, so that run covers the same tree.
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed() {
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$1" --status success --json databaseId --jq length
+          }
+          if [ "$(passed "$GITHUB_SHA")" -ge 1 ]; then exit 0; fi
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null)][0].head.sha // empty')
+          if [ -n "$head" ] && [ "$(passed "$head")" -ge 1 ]; then
+            echo "CI passed on ${head}, the last commit of the merged pull request."
+            exit 0
+          fi
+          echo "CI has not passed on ${GITHUB_SHA}. Wait for the CI run on main to go green, then run Publish by hand." >&2
+          exit 1
+
+      # The channel comes from the release pull request's first line
+      # ("Channel: prerelease"), or from the input when run by hand.
+      - name: Channel
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT: ${{ inputs.channel }}
+        run: |
+          channel=$INPUT
+          if [ -z "$channel" ]; then
+            channel=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '[.[] | select(.merged_at != null)][0].body // empty' \
+              | sed -n 's/^Channel: *\([a-z]*\).*$/\1/p' | head -n 1)
+          fi
+          case "$channel" in
+            prerelease | draft | release) ;;
+            *) echo "No channel named; using prerelease."; channel=prerelease ;;
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Channel: $channel" >> "$GITHUB_STEP_SUMMARY"
+
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # One .dmg that runs on Apple silicon and Intel Macs.
+          - name: macOS
+            os: macos-latest
+            args: --target universal-apple-darwin --bundles dmg
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+          - name: Ubuntu
+            os: ubuntu-22.04
+            args: --bundles deb
+          - name: Windows
+            os: windows-latest
+            args: --bundles nsis,msi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Version comes from rust-toolchain.toml, as in CI.
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          if [ -n "${{ matrix.rust_targets }}" ]; then rustup target add ${{ matrix.rust_targets }}; fi
+          rustc --version
+
+      - name: Install WebKitGTK (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # `tauri build` runs `npm run build` itself (beforeBuildCommand).
+      # macOS: an ad-hoc signature ("-") only. Without one, Apple silicon
+      # Macs report a downloaded app as damaged instead of offering
+      # "Open Anyway". It is not a Developer ID signature.
+      - name: Build installers
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        run: npx tauri build --ci ${{ matrix.args }}
+
+      # Only the installers. Never audit logs, fixture homes, or test output.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir dist-release
+          find target -path '*/release/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec cp {} dist-release/ \;
+          ls -l dist-release
+          test -n "$(ls dist-release)"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-${{ matrix.name }}
+          path: dist-release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish v${{ needs.prepare.outputs.version }}
+    needs: [prepare, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: installers-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist-release
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          {
+            echo "Space Optimiser ${VERSION}."
+            echo
+            if [ "$CHANNEL" != release ]; then
+              echo "**Test build.** Not for general use yet."
+              echo
+            fi
+            echo "These installers are not signed. macOS and Windows warn before opening them."
+            echo "How to install, what to test, and how to report back:"
+            echo "[docs/testing-guide.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/docs/testing-guide.md)."
+            echo
+            echo "| System | File |"
+            echo "| --- | --- |"
+            echo "| macOS 14 or later (Apple silicon and Intel) | \`.dmg\` |"
+            echo "| Ubuntu 22.04 or later | \`.deb\` |"
+            echo "| Windows 11, 64-bit (Windows 10 best effort) | \`-setup.exe\` (or \`.msi\`) |"
+            echo
+            echo "Cleanups cannot be undone; files do not go to the Trash."
+            echo "Check a download against \`SHA256SUMS.txt\`."
+            echo
+            echo "## Changes"
+            echo
+            scripts/changelog-section.sh "$VERSION"
+            echo
+            echo "Earlier versions: [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/CHANGELOG.md)."
+          } > notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          flags=""
+          case "$CHANNEL" in
+            prerelease) flags="--prerelease" ;;
+            draft) flags="--draft" ;;
+          esac
+          gh release create "v${VERSION}" dist-release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Space Optimiser ${VERSION}" \
+            --notes-file notes.md \
+            $flags
+          echo "Released v${VERSION} (${CHANNEL})" >> "$GITHUB_STEP_SUMMARY"
