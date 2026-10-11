@@ -21,6 +21,10 @@ export interface Candidate {
   found_by: string | null;
   /** Candidates this one removes too; selecting both counts them once. */
   covers: number[];
+  /** File or folder, for a top-level temp or log entry; null for other rows. */
+  kind: "file" | "folder" | null;
+  /** Whole days since the entry or anything in it changed (temp and log rows). */
+  age_days: number | null;
   file_count: number;
   links_not_followed: number;
   labels: ("shared" | "logical_size" | "quit_first")[];

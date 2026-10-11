@@ -185,6 +185,14 @@ pub(crate) struct ToolAction {
     pub args: &'static [&'static str],
 }
 
+/// What a top-level temp or log entry is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    File,
+    Folder,
+}
+
 /// A scan result (phase 4 item 7). The path and identity stay in the engine;
 /// the UI gets a lossy display name and an opaque id.
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +213,12 @@ pub struct Candidate {
     /// Other candidates this one removes too (a folder deleted whole that
     /// holds another row's folder). Selecting both counts them once.
     pub covers: Vec<CandidateId>,
+    /// File or folder, for a top-level temp or log entry. None for cache,
+    /// tool, Docker, and large-file rows.
+    pub kind: Option<EntryKind>,
+    /// Whole days since the entry or anything inside it last changed, for a
+    /// top-level temp or log entry.
+    pub age_days: Option<u32>,
     pub file_count: u64,
     pub links_not_followed: u64,
     pub labels: Vec<Label>,

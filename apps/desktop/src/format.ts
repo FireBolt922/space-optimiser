@@ -53,3 +53,11 @@ const RISK_WORDS: Record<string, string> = {
 export function riskWord(risk: string): string {
   return RISK_WORDS[risk] ?? risk;
 }
+
+/** An entry's age in days, in words: "1 day old", "3 months old". */
+export function formatAge(days: number): string {
+  if (days < 1) return "less than a day old";
+  if (days < 60) return `${plural(days, "day", "days")} old`;
+  if (days < 730) return `${plural(Math.floor(days / 30), "month", "months")} old`;
+  return `${plural(Math.floor(days / 365), "year", "years")} old`;
+}

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { errorMessage, type Candidate, type Note, type ScanView } from "../engine";
+import {
+  errorMessage,
+  type Candidate,
+  type Note,
+  type ScanView,
+  type SkippedView,
+} from "../engine";
 import { CATEGORIES, categoryBytes, categoryOf, type CategoryId } from "../categories";
-import { formatBytes, formatDuration, plural, riskWord } from "../format";
+import { formatAge, formatBytes, formatDuration, plural, riskWord } from "../format";
+import { SKIP_REASONS } from "../skipReasons";
+import { TEMP_SOURCES, tempSource } from "../tempSources";
 import { FolderIcon } from "../icons";
 
 interface Props {
@@ -34,6 +42,18 @@ function sizeText(c: Candidate): string {
 /** One accessible name with the row's name, risk, and size (phase 11). */
 function checkboxName(c: Candidate): string {
   return `${c.display_name}, ${riskWord(c.risk)} risk, ${sizeText(c)}`;
+}
+
+/** "Folder, 12 files · 3 days old" for temp and log rows; null for others. */
+function entryDetail(c: Candidate): string | null {
+  if (c.kind === null) return null;
+  const what = c.kind === "folder" ? `Folder, ${plural(c.file_count, "file", "files")}` : "File";
+  return c.age_days === null ? what : `${what} · ${formatAge(c.age_days)}`;
+}
+
+/** A delete that frees nothing measurable: empty, or space shared elsewhere. */
+function isEmpty(c: Candidate): boolean {
+  return c.action === "delete" && c.estimated_bytes === 0 && c.upper_bound_bytes === null;
 }
 
 function actionWord(c: Candidate): string {
@@ -147,6 +167,137 @@ export function Results({
       return next;
     });
 
+  const renderRow = (c: Candidate) => {
+    const detail = entryDetail(c);
+    return (
+      <li key={c.id} className="row">
+        {c.action === "report" ? (
+          <span className="row-name file-name">{c.display_name}</span>
+        ) : (
+          <label className="row-name">
+            <input
+              type="checkbox"
+              aria-label={checkboxName(c)}
+              checked={chosen.has(c.id)}
+              disabled={!selectable(c)}
+              onChange={() => toggle(c.id)}
+            />
+            <span className="file-name">{c.display_name}</span>
+          </label>
+        )}
+        <span className="badge">{riskWord(c.risk)}</span>
+        <span className="body-sm ink-muted row-action">{actionWord(c)}</span>
+        <span className="body-sm row-size">
+          {sizeText(c)}
+          {c.labels.includes("shared") && " (shared, frees nothing)"}
+        </span>
+        {c.revealable ? (
+          <button
+            type="button"
+            className="button button-sm"
+            aria-label={`Show in folder: ${c.display_name}`}
+            onClick={() => reveal(c.id)}
+          >
+            <FolderIcon />
+            Show in folder
+          </button>
+        ) : (
+          <span />
+        )}
+        {detail && <span className="body-sm ink-muted row-detail">{detail}</span>}
+        {c.found_by && <span className="body-sm ink-muted row-detail">{c.found_by}</span>}
+        {revealErrors[c.id] && (
+          <p className="body-sm row-detail row-error" role="alert">
+            {revealErrors[c.id]}
+          </p>
+        )}
+      </li>
+    );
+  };
+
+  /** Up to ROWS_SHOWN rows, then "Show all" for the rest. */
+  const folded = (key: string, label: string, rows: Candidate[]) => {
+    const open = expanded.has(key) || rows.length <= ROWS_SHOWN;
+    const visible = open ? rows : rows.slice(0, ROWS_SHOWN);
+    return (
+      <>
+        <ul className="rows">{visible.map(renderRow)}</ul>
+        {rows.length > ROWS_SHOWN && (
+          <button
+            type="button"
+            className="button button-sm group-more"
+            aria-expanded={open}
+            onClick={() => toggleExpanded(key)}
+          >
+            {open ? `Show fewer in ${label}` : `Show all ${rows.length} items in ${label}`}
+          </button>
+        )}
+      </>
+    );
+  };
+
+  /** Temporary files: sub-groups by source, empty items folded into one line. */
+  const tempRows = (label: string, rows: Candidate[]) => {
+    const empty = rows.filter(isEmpty);
+    const sized = rows.filter((c) => !isEmpty(c));
+    const sources = TEMP_SOURCES.map((source) => ({
+      ...source,
+      rows: sized.filter((c) => tempSource(c.display_name) === source.id),
+    })).filter((source) => source.rows.length > 0);
+    const emptyKey = `${label}/empty`;
+    const emptyOpen = expanded.has(emptyKey) || needle !== "";
+    return (
+      <>
+        {sources.length <= 1
+          ? folded(label, label, sized)
+          : sources.map((source) => (
+              <div key={source.id} className="subgroup">
+                <div className="group-head">
+                  <h3 className="heading">{source.title}</h3>
+                  <span className="body-sm ink-muted">
+                    {plural(source.rows.length, "item", "items")},{" "}
+                    {formatBytes(categoryBytes(source.rows))}
+                  </span>
+                </div>
+                <p className="body-sm ink-muted">{source.description}</p>
+                {folded(`${label}/${source.id}`, source.title, source.rows)}
+              </div>
+            ))}
+        {empty.length > 0 && (
+          <div className="subgroup">
+            <button
+              type="button"
+              className="button button-sm group-more"
+              aria-expanded={emptyOpen}
+              onClick={() => toggleExpanded(emptyKey)}
+            >
+              {emptyOpen
+                ? `Hide ${plural(empty.length, "empty item", "empty items")}`
+                : `Show ${plural(empty.length, "empty item", "empty items")} (0 bytes)`}
+            </button>
+            <p className="body-sm ink-muted">
+              Empty, or their space is shared with another file, so cleaning them frees almost
+              nothing. They are still cleaned when selected.
+            </p>
+            {emptyOpen && <ul className="rows">{empty.map(renderRow)}</ul>}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // Left alone: grouped by reason, largest group first.
+  const byReason = new Map<string, SkippedView[]>();
+  for (const s of scan.skipped) byReason.set(s.reason, [...(byReason.get(s.reason) ?? []), s]);
+  const reasons = [...byReason.entries()]
+    .map(([reason, items]) => ({
+      reason,
+      items,
+      title: SKIP_REASONS[reason]?.title ?? items[0].detail,
+      explanation: SKIP_REASONS[reason]?.explanation ?? null,
+    }))
+    .sort((a, b) => b.items.length - a.items.length);
+
   return (
     <section className="screen" aria-labelledby="results-title">
       <div className="screen-head">
@@ -227,86 +378,28 @@ export function Results({
             </p>
           )}
           {shown.length === 0 && <p className="body">No items match this filter.</p>}
-          {shown.map(({ label, rows, notes }) => {
-            const open = expanded.has(label) || rows.length <= ROWS_SHOWN;
-            const visible = open ? rows : rows.slice(0, ROWS_SHOWN);
-            return (
-              <section key={label} className="card group" aria-label={label}>
-                <div className="group-head">
-                  <h2 className="title">{label}</h2>
-                  {rows.length > 0 && (
-                    <span className="body-sm ink-muted">
-                      {plural(rows.length, "item", "items")}, {formatBytes(categoryBytes(rows))}
-                    </span>
-                  )}
-                </div>
-                {rows.length > 0 && <p className="body-sm ink-muted">{rows[0].explanation}</p>}
-                {notes.map((n, i) => (
-                  <p key={i} className="body-sm ink-muted">
-                    {n.text}
-                    {n.bytes !== null && ` (${formatBytes(n.bytes)})`}
-                  </p>
-                ))}
-                <ul className="rows">
-                  {visible.map((c) => (
-                    <li key={c.id} className="row">
-                      {c.action === "report" ? (
-                        <span className="row-name file-name">{c.display_name}</span>
-                      ) : (
-                        <label className="row-name">
-                          <input
-                            type="checkbox"
-                            aria-label={checkboxName(c)}
-                            checked={chosen.has(c.id)}
-                            disabled={!selectable(c)}
-                            onChange={() => toggle(c.id)}
-                          />
-                          <span className="file-name">{c.display_name}</span>
-                        </label>
-                      )}
-                      <span className="badge">{riskWord(c.risk)}</span>
-                      <span className="body-sm ink-muted row-action">{actionWord(c)}</span>
-                      <span className="body-sm row-size">
-                        {sizeText(c)}
-                        {c.labels.includes("shared") && " (shared, frees nothing)"}
-                      </span>
-                      {c.revealable ? (
-                        <button
-                          type="button"
-                          className="button button-sm"
-                          aria-label={`Show in folder: ${c.display_name}`}
-                          onClick={() => reveal(c.id)}
-                        >
-                          <FolderIcon />
-                          Show in folder
-                        </button>
-                      ) : (
-                        <span />
-                      )}
-                      {c.found_by && (
-                        <span className="body-sm ink-muted row-detail">{c.found_by}</span>
-                      )}
-                      {revealErrors[c.id] && (
-                        <p className="body-sm row-detail row-error" role="alert">
-                          {revealErrors[c.id]}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {rows.length > ROWS_SHOWN && (
-                  <button
-                    type="button"
-                    className="button button-sm group-more"
-                    aria-expanded={open}
-                    onClick={() => toggleExpanded(label)}
-                  >
-                    {open ? `Show fewer in ${label}` : `Show all ${rows.length} items in ${label}`}
-                  </button>
+          {shown.map(({ label, rows, notes }) => (
+            <section key={label} className="card group" aria-label={label}>
+              <div className="group-head">
+                <h2 className="title">{label}</h2>
+                {rows.length > 0 && (
+                  <span className="body-sm ink-muted">
+                    {plural(rows.length, "item", "items")}, {formatBytes(categoryBytes(rows))}
+                  </span>
                 )}
-              </section>
-            );
-          })}
+              </div>
+              {rows.length > 0 && <p className="body-sm ink-muted">{rows[0].explanation}</p>}
+              {notes.map((n, i) => (
+                <p key={i} className="body-sm ink-muted">
+                  {n.text}
+                  {n.bytes !== null && ` (${formatBytes(n.bytes)})`}
+                </p>
+              ))}
+              {rows.length > 0 && rows[0].catalog_id === "user-temp"
+                ? tempRows(label, rows)
+                : folded(label, label, rows)}
+            </section>
+          ))}
         </>
       )}
 
@@ -315,20 +408,49 @@ export function Results({
           <summary className="heading">
             Left alone ({plural(scan.skipped.length, "item", "items")})
           </summary>
-          <ul className="plain-list body-sm">
-            {scan.roots
-              .filter((r) => r.skipped)
-              .map((r, i) => (
-                <li key={`root-${i}`}>
-                  {r.location_label}: {r.skipped}
-                </li>
-              ))}
-            {scan.skipped.slice(0, 200).map((s, i) => (
-              <li key={i}>
-                <span className="file-name">{s.display_name}</span>: {s.detail}
-              </li>
-            ))}
-          </ul>
+          <p className="body-sm ink-muted">
+            Space Optimiser checked these and did not offer them. Nothing here is removed.
+          </p>
+          {scan.roots.some((r) => r.skipped) && (
+            <ul className="plain-list body-sm">
+              {scan.roots
+                .filter((r) => r.skipped)
+                .map((r, i) => (
+                  <li key={`root-${i}`}>
+                    {r.location_label}: {r.skipped}
+                  </li>
+                ))}
+            </ul>
+          )}
+          {reasons.map(({ reason, items, title, explanation }) => {
+            const key = `skipped/${reason}`;
+            const open = expanded.has(key) || items.length <= ROWS_SHOWN;
+            return (
+              <div key={reason} className="subgroup">
+                <h3 className="heading">
+                  {title} ({plural(items.length, "item", "items")})
+                </h3>
+                {explanation && <p className="body-sm ink-muted">{explanation}</p>}
+                <ul className="plain-list body-sm">
+                  {(open ? items : items.slice(0, ROWS_SHOWN)).map((s, i) => (
+                    <li key={i} className="file-name">
+                      {s.display_name}
+                    </li>
+                  ))}
+                </ul>
+                {items.length > ROWS_SHOWN && (
+                  <button
+                    type="button"
+                    className="button button-sm group-more"
+                    aria-expanded={open}
+                    onClick={() => toggleExpanded(key)}
+                  >
+                    {open ? `Show fewer in ${title}` : `Show all ${items.length} items in ${title}`}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </details>
       )}
 

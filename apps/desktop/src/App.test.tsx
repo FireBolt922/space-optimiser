@@ -211,7 +211,7 @@ describe("results", () => {
     expect(screen.getAllByText("Low").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Medium").length).toBeGreaterThan(0);
     expect(screen.getByText("Info")).toBeTruthy();
-    expect(screen.getByText(/it changed within the last day/)).toBeTruthy();
+    expect(screen.getByText("Changed in the last day (1 item)")).toBeTruthy();
   });
 
   it("focus moves to the results heading", async () => {
@@ -721,6 +721,78 @@ describe("about and help", () => {
 });
 
 // Categories, filters, folded groups, and the sticky action bar.
+describe("readable temporary files and Left alone", () => {
+  const temp = (id: number, display_name: string, over = {}) => ({
+    ...CANDIDATES[0],
+    id,
+    display_name,
+    estimated_bytes: 5000,
+    kind: "folder" as const,
+    age_days: 3,
+    file_count: 12,
+    ...over,
+  });
+  const scanWith = () =>
+    finishedScan({
+      candidates: [
+        temp(40, "com.apple.avconferenced"),
+        temp(41, ".com.openai.codex.9XF9pN", { kind: "file", file_count: 1, age_days: 1 }),
+        temp(42, ".tmpOJTzZZ", { estimated_bytes: 0 }),
+        temp(43, "com.apple.ThreadCommissionerService", { estimated_bytes: 0 }),
+        temp(44, "installer-log", { age_days: 90 }),
+      ],
+      skipped: [
+        { display_name: "fresh-1", reason: "fresh", detail: "it changed within the last day" },
+        { display_name: "fresh-2", reason: "fresh", detail: "it changed within the last day" },
+        { display_name: "my-repo", reason: "project", detail: "it looks like a project folder" },
+      ],
+    });
+
+  it("groups temporary rows by source and says what each row is", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    const group = screen.getByRole("region", { name: "Temporary files" });
+    const headings = within(group)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(headings).toEqual(["App temporary folders", "macOS system services", "Other"]);
+    expect(within(group).getByText("File · 1 day old")).toBeTruthy();
+    expect(within(group).getByText("Folder, 12 files · 3 months old")).toBeTruthy();
+  });
+
+  it("folds empty items into one line that Select safe items still selects", async () => {
+    const engine = await toResults(fakeEngine({ scan: scanWith() }));
+    expect(screen.queryByText(".tmpOJTzZZ")).toBeNull();
+    const fold = screen.getByRole("button", { name: "Show 2 empty items (0 bytes)" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
+    expect(screen.getByText(/5 items selected/)).toBeTruthy();
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(box(".tmpOJTzZZ").checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    expect(engine.buildPlan.mock.calls[0][1]).toEqual(expect.arrayContaining([42, 43]));
+  });
+
+  it("the name filter finds a folded empty item", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    fireEvent.change(screen.getByLabelText("Filter by name"), { target: { value: "tmpOJ" } });
+    expect(screen.getByText(".tmpOJTzZZ")).toBeTruthy();
+  });
+
+  it("Left alone groups items by reason with a plain explanation", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    const left = screen.getByText("Left alone (3 items)").closest("details")!;
+    const reasons = within(left)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(reasons).toEqual(["Changed in the last day (2 items)", "Looks like a project (1 item)"]);
+    expect(within(left).getByText(/Nothing here is removed/)).toBeTruthy();
+    expect(within(left).getByText(/may be your own work/)).toBeTruthy();
+    expect(within(left).getByText("my-repo")).toBeTruthy();
+  });
+});
+
 describe("categories and long lists", () => {
   function manyTemp(count: number) {
     return Array.from({ length: count }, (_, i) => ({

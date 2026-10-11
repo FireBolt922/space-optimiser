@@ -9,14 +9,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
 use crate::docker;
 use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{
-    Action, Candidate, CandidateId, Confidence, Label, Note, Platform, ScanMode, Scope, ToolAction,
+    Action, Candidate, CandidateId, Confidence, EntryKind, Label, Note, Platform, ScanMode, Scope,
+    ToolAction,
 };
 pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
@@ -423,6 +424,8 @@ struct Summary {
     /// Everything inside the entry, links included. The executor deletes
     /// only these.
     members: Vec<FileId>,
+    /// The newest age timestamp of the entry and everything inside it.
+    newest: Option<SystemTime>,
 }
 
 impl Summary {
@@ -434,6 +437,7 @@ impl Summary {
             shared: false,
             exact,
             members: Vec::new(),
+            newest: None,
         }
     }
 }
@@ -621,7 +625,15 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                         file_id: facts.id,
                         scope: Scope::Entry,
                     };
-                    candidates.push(self.candidate(row, target, display_name, summary));
+                    let age_days = summary.newest.and_then(|t| age_days(self.ctx.now(), t));
+                    let mut candidate = self.candidate(row, target, display_name, summary);
+                    candidate.kind = Some(if facts.kind == Kind::Dir {
+                        EntryKind::Folder
+                    } else {
+                        EntryKind::File
+                    });
+                    candidate.age_days = age_days;
+                    candidates.push(candidate);
                 }
             }
         }
@@ -1011,6 +1023,8 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             upper_bound_bytes: None,
             found_by: None,
             covers: Vec::new(),
+            kind: None,
+            age_days: None,
             file_count: s.files,
             links_not_followed: s.links,
             labels,
@@ -1059,12 +1073,14 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             let bytes = if shared { 0 } else { facts.size.bytes };
             self.tick(bytes);
             let mut summary = Summary::empty(facts.size.exact);
+            summary.newest = Some(newest(&facts));
             summary.files = 1;
             summary.bytes = bytes;
             summary.shared = shared;
             return Ok(Verdict::Keep(facts, summary));
         }
         let mut summary = Summary::empty(facts.size.exact);
+        summary.newest = Some(newest(&facts));
         if count_self {
             summary.bytes = facts.size.bytes;
         }
@@ -1102,6 +1118,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                 }
                 summary.members.push(child_facts.id);
                 summary.exact &= child_facts.size.exact;
+                summary.newest = summary.newest.max(Some(newest(&child_facts)));
                 if child_facts.kind == Kind::Dir {
                     summary.bytes += child_facts.size.bytes;
                     stack.push(child);
@@ -1156,6 +1173,17 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             self.last_event = Instant::now();
         }
     }
+}
+
+/// The newer of an entry's two age timestamps (see [`policy::is_old`]).
+fn newest(facts: &Facts) -> SystemTime {
+    facts.times.0.max(facts.times.1)
+}
+
+/// Whole days from `newest` to `now`; none for a timestamp in the future.
+fn age_days(now: SystemTime, newest: SystemTime) -> Option<u32> {
+    let age = now.duration_since(newest).ok()?;
+    u32::try_from(age.as_secs() / 86_400).ok()
 }
 
 fn note(out: &mut Scan, row: CatalogId, text: String, bytes: Option<u64>) {

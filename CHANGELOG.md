@@ -14,6 +14,11 @@ minor version can change behaviour.
   Waiting, and shows how long the scan has been running.
 - Results has Scan again at the top as well, and says when the scan ran and
   how long it took.
+- Temporary files are grouped by where they came from (app folders, macOS
+  system services, unnamed scratch files, other). Each row says whether it is
+  a file or a folder and how old it is, and empty items fold into one line.
+- "Left alone" groups skipped items by reason, with a sentence on why each
+  reason keeps an item out.
 
 ### Changed
 

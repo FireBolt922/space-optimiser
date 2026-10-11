@@ -23,6 +23,8 @@ function candidate(over: Partial<Candidate> & Pick<Candidate, "id" | "display_na
     upper_bound_bytes: null,
     found_by: null,
     covers: [],
+    kind: null,
+    age_days: null,
     file_count: 1,
     links_not_followed: 0,
     labels: [],
