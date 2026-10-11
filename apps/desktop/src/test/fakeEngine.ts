@@ -159,7 +159,8 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
   return {
     scan_id: 7,
     status: "finished",
-    progress: { files_seen: 12, bytes_seen: 3 * 1024 * 1024 },
+    stages: ["temp", "caches"],
+    progress: { files_seen: 12, bytes_seen: 3 * 1024 * 1024, stage: "caches", detail: null },
     duration_ms: 240,
     error: null,
     candidates: CANDIDATES,
@@ -246,6 +247,9 @@ export interface FakeOptions {
   scan?: ScanView;
   /** The scan stays "running" until it is cancelled. */
   scanRuns?: boolean;
+  /** Progress a running scan reports. */
+  scanProgress?: ScanView["progress"];
+  scanStages?: ScanView["stages"];
   execute?: ExecuteStart[];
   confirmError?: { kind: string; message: string };
   interrupted?: InterruptedRun | null;
@@ -260,7 +264,7 @@ export function fakeEngine(options: FakeOptions = {}) {
   let cancelled = false;
   const executes = [...(options.execute ?? [{ status: "started" as const }])];
   const engine = {
-    startScan: vi.fn(async () => 7),
+    startScan: vi.fn<Engine["startScan"]>(async () => 7),
     cancelScan: vi.fn(async () => {
       cancelled = true;
     }),
@@ -268,6 +272,13 @@ export function fakeEngine(options: FakeOptions = {}) {
       if (options.scanRuns) {
         return finishedScan({
           status: cancelled ? "cancelled" : "running",
+          progress: options.scanProgress ?? {
+            files_seen: 0,
+            bytes_seen: 0,
+            stage: "temp",
+            detail: null,
+          },
+          stages: options.scanStages ?? ["temp", "caches"],
           candidates: [],
           skipped: [],
           roots: [],

@@ -41,11 +41,51 @@ impl CancelToken {
     }
 }
 
-/// Sent at least every 200 ms or 1,000 files, whichever comes first.
+/// Sent at least every 200 ms or 1,000 files, whichever comes first, and
+/// whenever the scan moves to another stage or tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Progress {
     pub files_seen: u64,
     pub bytes_seen: u64,
+    pub stage: Stage,
+    /// The tool a [`Stage::Tools`] row is asking, such as `uv`.
+    pub detail: Option<&'static str>,
+}
+
+impl Progress {
+    pub const START: Progress = Progress {
+        files_seen: 0,
+        bytes_seen: 0,
+        stage: Stage::Temp,
+        detail: None,
+    };
+}
+
+/// A part of a scan, in the order the scan runs them. The UI names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Temp,
+    Caches,
+    Logs,
+    Tools,
+    Docker,
+    LargeFiles,
+}
+
+/// The stages `mode` runs, in order.
+pub fn stages(mode: ScanMode) -> Vec<Stage> {
+    match mode {
+        ScanMode::Normal => vec![Stage::Temp, Stage::Caches],
+        ScanMode::Deep => vec![
+            Stage::Temp,
+            Stage::Caches,
+            Stage::Logs,
+            Stage::Tools,
+            Stage::Docker,
+            Stage::LargeFiles,
+        ],
+    }
 }
 
 const PROGRESS_FILES: u64 = 1_000;
@@ -301,6 +341,7 @@ pub fn scan(
         progress: walk.progress,
     };
     let mut seen = HashSet::new();
+    walk.stage(Stage::Caches, None);
     let rows: &[CatalogId] = match mode {
         ScanMode::Normal => &CACHE_ROWS,
         ScanMode::Deep => &DEEP_CACHE_ROWS,
@@ -333,13 +374,17 @@ pub fn scan(
         }
     }
     if mode == ScanMode::Deep {
+        walk.stage(Stage::Logs, None);
         walk.logs(&mut out)?;
         for spec in &TOOL_ROWS {
             walk.check_cancel()?;
+            walk.stage(Stage::Tools, spec.names.first().copied());
             walk.tool_row(spec, &mut out)?;
         }
         walk.check_cancel()?;
+        walk.stage(Stage::Docker, None);
         walk.docker(&mut out);
+        walk.stage(Stage::LargeFiles, None);
         walk.large_files(&mut out)?;
     }
     out.progress = walk.progress;
@@ -412,17 +457,25 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             ctx,
             cancel,
             on_progress,
-            progress: Progress {
-                files_seen: 0,
-                bytes_seen: 0,
-            },
+            progress: Progress::START,
             since_event: 0,
             last_event: Instant::now(),
             next_id: 1,
         }
     }
 
+    /// Moves to `stage` and says so at once: a tool or Docker can keep the
+    /// scan waiting without a single file tick.
+    fn stage(&mut self, stage: Stage, detail: Option<&'static str>) {
+        self.progress.stage = stage;
+        self.progress.detail = detail;
+        (self.on_progress)(self.progress);
+        self.since_event = 0;
+        self.last_event = Instant::now();
+    }
+
     fn temp_roots(&mut self) -> std::result::Result<Vec<RootOutcome>, ScanError> {
+        self.stage(Stage::Temp, None);
         let ctx = self.ctx;
         let mut seen = HashSet::new();
         let mut roots = Vec::new();

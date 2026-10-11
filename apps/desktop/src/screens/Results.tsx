@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Candidate, type Note, type ScanView } from "../engine";
 import { CATEGORIES, categoryBytes, categoryOf, type CategoryId } from "../categories";
-import { formatBytes, plural, riskWord } from "../format";
+import { formatBytes, formatDuration, plural, riskWord } from "../format";
 import { FolderIcon } from "../icons";
 
 interface Props {
@@ -9,6 +9,9 @@ interface Props {
   selected: number[];
   onSelect: (selected: number[]) => void;
   onReview: () => void;
+  /** When the results arrived (`Date.now()`), if known. */
+  finishedAt: number | null;
+  /** Reruns the scan in the same mode. */
   onScanAgain: () => void;
   /** Opens the file manager at a row. Sends the id only. */
   onReveal: (candidateId: number) => Promise<void>;
@@ -72,7 +75,15 @@ function groupRows(scan: ScanView): Group[] {
   return [...groups.values()];
 }
 
-export function Results({ scan, selected, onSelect, onReview, onScanAgain, onReveal }: Props) {
+export function Results({
+  scan,
+  selected,
+  onSelect,
+  onReview,
+  finishedAt,
+  onScanAgain,
+  onReveal,
+}: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
   const [revealErrors, setRevealErrors] = useState<Record<number, string>>({});
@@ -138,12 +149,23 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
 
   return (
     <section className="screen" aria-labelledby="results-title">
-      <h1 id="results-title" className="title-xl" tabIndex={-1} ref={heading}>
-        Results
-      </h1>
+      <div className="screen-head">
+        <h1 id="results-title" className="title-xl" tabIndex={-1} ref={heading}>
+          Results
+        </h1>
+        <button type="button" className="button" onClick={onScanAgain}>
+          Scan again
+        </button>
+      </div>
       <p className="body-sm ink-muted">
-        Scan took {(scan.duration_ms / 1000).toFixed(1)} seconds and checked{" "}
-        {plural(scan.progress.files_seen, "file", "files")}.
+        {[
+          finishedAt !== null &&
+            `Scanned at ${new Date(finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
+          `took ${formatDuration(scan.duration_ms)}`,
+          `checked ${plural(scan.progress.files_seen, "file", "files")}`,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </p>
 
       {scan.candidates.length === 0 && scan.notes.length === 0 ? (

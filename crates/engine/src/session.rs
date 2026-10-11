@@ -209,10 +209,8 @@ impl Engine {
             view: ScanView {
                 scan_id,
                 status: ScanStatus::Running,
-                progress: Progress {
-                    files_seen: 0,
-                    bytes_seen: 0,
-                },
+                stages: discover::stages(mode),
+                progress: Progress::START,
                 duration_ms: 0,
                 error: None,
                 candidates: Vec::new(),

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::discover::Progress;
+use crate::discover::{Progress, Stage};
 use crate::measure::FileId;
 use crate::policy::{CatalogId, RootRejection, SkipReason, ValidRoot};
 use crate::tool::Tool;
@@ -290,6 +290,8 @@ pub struct Note {
 pub struct ScanView {
     pub scan_id: ScanId,
     pub status: ScanStatus,
+    /// The stages this scan runs, in order; `progress.stage` is the current one.
+    pub stages: Vec<Stage>,
     pub progress: Progress,
     /// How long the scan took, once it stops running (phase 5 item 9).
     pub duration_ms: u64,

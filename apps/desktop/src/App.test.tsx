@@ -83,9 +83,72 @@ describe("scanning", () => {
     await waitFor(() => expect(engine.cancelScan).toHaveBeenCalledWith(7));
     await screen.findByRole("button", { name: "Normal Scan" });
   });
+
+  it("names the stage it is in, the tool it is asking, and each stage's state", async () => {
+    const engine = fakeEngine({
+      scanRuns: true,
+      scanProgress: {
+        files_seen: 1_203_836,
+        bytes_seen: 39_300_000_000,
+        stage: "tools",
+        detail: "uv",
+      },
+      scanStages: ["temp", "caches", "logs", "tools", "docker", "large_files"],
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    expect(await screen.findByText("Asking uv where its cache is.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Asking uv where its cache is.");
+    expect(screen.getByText("1,203,836 files so far, 39.3 GB.")).toBeTruthy();
+    const stages = within(screen.getByRole("list", { name: "Scan stages" }))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(stages).toEqual([
+      "Temporary filesDone",
+      "App and browser cachesDone",
+      "Old logsDone",
+      "Developer tool cachesChecking",
+      "DockerWaiting",
+      "Large filesWaiting",
+    ]);
+  });
+
+  it("shows how long the scan has been running", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<App engine={fakeEngine({ scanRuns: true })} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+      expect(await screen.findByText(/^Running for /)).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(72_000);
+      });
+      expect(screen.getByText(/^Running for 1 minute 1[23] seconds$/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("results", () => {
+  it("the header says when the scan ran and offers Scan again in the same mode", async () => {
+    const engine = fakeEngine({
+      scan: finishedScan({
+        duration_ms: 90_900,
+        progress: { files_seen: 2_203_944, bytes_seen: 1, stage: "caches", detail: null },
+      }),
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    await screen.findByRole("heading", { name: "Results" });
+    expect(
+      screen.getByText(/^Scanned at .+ · took 1 minute 30 seconds · checked 2,203,944 files$/),
+    ).toBeTruthy();
+    const header = screen.getByRole("heading", { name: "Results" }).parentElement!;
+    fireEvent.click(within(header).getByRole("button", { name: "Scan again" }));
+    await waitFor(() => expect(engine.startScan).toHaveBeenCalledTimes(2));
+    expect(engine.startScan.mock.calls.map((c) => c[0])).toEqual(["deep", "deep"]);
+  });
+
   // Phase 7 tests 1 and 2.
   it("Select safe items checks only bulk-safe rows", async () => {
     await toResults();
@@ -140,7 +203,7 @@ describe("results", () => {
   // Phase 5 item 9.
   it("shows how long the scan took", async () => {
     await toResults();
-    expect(screen.getByText(/Scan took 0\.2 seconds/)).toBeTruthy();
+    expect(screen.getByText(/took less than a second/)).toBeTruthy();
   });
 
   it("risk is shown as a word, and skipped entries show their reason", async () => {

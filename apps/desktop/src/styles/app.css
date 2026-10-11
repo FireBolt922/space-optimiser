@@ -579,3 +579,35 @@ details.card summary,
   flex-direction: column;
   gap: var(--space-2);
 }
+
+/* Results header: the heading with Scan again on the right. */
+.screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* Scanning: one line per stage, the state in words. */
+.stages {
+  max-width: 480px;
+  margin: var(--space-4) 0;
+}
+
+.stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-waiting {
+  color: var(--ink-muted);
+}
+
+.stage-checking .badge {
+  border-color: var(--primary);
+}

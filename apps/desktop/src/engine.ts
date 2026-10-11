@@ -53,10 +53,21 @@ export interface Note {
   bytes: number | null;
 }
 
+/** A part of a scan, in the order the engine runs them. */
+export type ScanStage = "temp" | "caches" | "logs" | "tools" | "docker" | "large_files";
+
 export interface ScanView {
   scan_id: number;
   status: "running" | "finished" | "cancelled" | "failed";
-  progress: { files_seen: number; bytes_seen: number };
+  /** The stages this scan runs, in order; `progress.stage` is the current one. */
+  stages: ScanStage[];
+  progress: {
+    files_seen: number;
+    bytes_seen: number;
+    stage: ScanStage;
+    /** The tool a "tools" stage is asking, such as `uv`. */
+    detail: string | null;
+  };
   duration_ms: number;
   error: string | null;
   candidates: Candidate[];

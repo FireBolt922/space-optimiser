@@ -7,6 +7,20 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- The Scanning screen says which part of the scan is running (for example
+  "Asking uv where its cache is."), lists every stage as Done, Checking, or
+  Waiting, and shows how long the scan has been running.
+- Results has Scan again at the top as well, and says when the scan ran and
+  how long it took.
+
+### Changed
+
+- Scan again reruns the same scan mode instead of returning to the start
+  screen.
+- Large counts are written with thousands separators.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added
