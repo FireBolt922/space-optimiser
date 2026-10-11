@@ -1,3 +1,4 @@
+import licenceText from "../../../../LICENSE?raw";
 import oflText from "../assets/fonts/OFL.txt?raw";
 import type { AppInfo } from "../engine";
 import { NO_UPLOAD, SAFETY_WORDING } from "../copy";
@@ -33,12 +34,17 @@ export function About({ info, onHelp }: Props) {
 
       <div className="card stack">
         <h2 className="title">Licences</h2>
-        <p className="body-sm">
-          The Inter typeface is used under the SIL Open Font License 1.1.
-        </p>
+        <p className="body-sm">Space Optimiser is free software under the MIT License.</p>
         <details>
-          <summary className="body-sm summary">Show the licence text</summary>
-          <pre className="code log" tabIndex={0} aria-label="Licence text">
+          <summary className="body-sm summary">Show the MIT License text</summary>
+          <pre className="code log" tabIndex={0} aria-label="MIT License text">
+            {licenceText}
+          </pre>
+        </details>
+        <p className="body-sm">The Inter typeface is used under the SIL Open Font License 1.1.</p>
+        <details>
+          <summary className="body-sm summary">Show the Open Font License text</summary>
+          <pre className="code log" tabIndex={0} aria-label="Open Font License text">
             {oflText}
           </pre>
         </details>

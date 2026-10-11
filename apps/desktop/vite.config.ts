@@ -10,6 +10,8 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
+    // The About screen imports the repository LICENSE.
+    fs: { allow: [".", "../.."] },
   },
   build: {
     target: "es2022",
@@ -17,5 +19,13 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**", "src/vite-env.d.ts", "src/main.tsx"],
+      reporter: ["text", "text-summary", "lcov"],
+      reportsDirectory: "coverage",
+      thresholds: { lines: 80, functions: 80, branches: 70, statements: 80 },
+    },
   },
 });

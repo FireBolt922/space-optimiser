@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/FireBolt922/space-optimiser/security/advisories/new
+    about: Anything that could make the app delete the wrong file. Never a public issue.
+  - name: Test a pre-release build
+    url: https://github.com/FireBolt922/space-optimiser/blob/main/docs/testing-guide.md
+    about: The 30-minute guide for testers, with the checklist to report back.

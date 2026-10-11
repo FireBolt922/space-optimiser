@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a change, or a new cleanup rule for the catalog.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The catalog is an allowlist. A new cleanup is added only after its risks are written down, so the questions below are the same ones a maintainer answers before writing code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What takes space, or what gets in the way, today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should the app do? For a cleanup rule, name the exact folders on each operating system.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: What can go wrong
+      description: For a cleanup rule, what breaks if these files are removed while an app is running, and what has to be rebuilt or downloaded again?
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms
+      multiple: true
+      options: [macOS, Ubuntu, Windows]

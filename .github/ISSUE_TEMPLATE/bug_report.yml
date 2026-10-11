@@ -1,0 +1,55 @@
+name: Bug report
+description: Something did not work, or the app showed or removed something it should not have.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the app deleted a file it should not have, or you think it could, **do not post the details here**. Use the private form in [SECURITY.md](../blob/main/SECURITY.md) instead.
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and version
+      placeholder: "macOS 15.2 (Apple silicon) / Ubuntu 24.04 / Windows 11 23H2"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version (About screen)
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: scan
+    attributes:
+      label: Scan mode
+      options: [Normal Scan, Deep Scan, Not applicable]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: Step by step. Say whether you confirmed a cleanup.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Paste the exact wording the app showed. Screenshots help. Please blur private file names.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Exported report or audit log lines (optional)
+      description: Export report on the report screen writes a text file to Downloads. Share only what you are comfortable with.
+      render: text
