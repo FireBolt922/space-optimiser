@@ -244,7 +244,8 @@ describe("running and report", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     await waitFor(() => expect(engine.stopRun).toHaveBeenCalledWith(11));
-    expect(screen.getByText("1 of 2 items done")).toBeTruthy();
+    // Progress arrives from the next poll, after the click, and must survive it.
+    expect(await screen.findByText("1 of 2 items done")).toBeTruthy();
   });
 });
 

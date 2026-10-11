@@ -217,7 +217,8 @@ export default function App({ engine }: { engine: Engine }) {
 
   const stop = async () => {
     if (screen.kind !== "running") return;
-    setScreen({ ...screen, stopping: true });
+    // A functional update keeps progress a poll delivered after this render.
+    setScreen((s) => (s.kind === "running" ? { ...s, stopping: true } : s));
     await engine.stopRun(screen.planId).catch(() => undefined);
   };
 
