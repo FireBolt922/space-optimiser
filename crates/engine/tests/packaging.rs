@@ -39,12 +39,36 @@ fn the_version_has_one_source() {
     assert_eq!(lock["packages"][""]["version"], env!("CARGO_PKG_VERSION"));
 }
 
-/// The version of a package in Cargo.lock.
+/// The version of a package in a Cargo.lock text. Line by line, because a
+/// Windows checkout has CRLF line endings.
+fn crate_version_in_lock(lock: &str, name: &str) -> Option<String> {
+    let mut lines = lock.lines().map(str::trim);
+    let wanted = format!("name = \"{name}\"");
+    lines.find(|line| *line == wanted)?;
+    let version = lines.next()?.strip_prefix("version = \"")?;
+    Some(version.trim_end_matches('"').to_string())
+}
+
 fn locked_crate_version(name: &str) -> String {
     let lock = fs::read_to_string(repo_root().join("Cargo.lock")).unwrap();
-    let header = format!("name = \"{name}\"\nversion = \"");
-    let start = lock.find(&header).expect("crate is in Cargo.lock") + header.len();
-    lock[start..].split('"').next().unwrap().to_string()
+    crate_version_in_lock(&lock, name).expect("crate is in Cargo.lock")
+}
+
+#[test]
+fn the_lock_reader_handles_both_line_endings() {
+    let lf = "[[package]]\nname = \"tauri-build\"\nversion = \"2.6.3\"\n\n[[package]]\nname = \"tauri\"\nversion = \"2.11.6\"\n";
+    let crlf = lf.replace('\n', "\r\n");
+    for lock in [lf, crlf.as_str()] {
+        assert_eq!(
+            crate_version_in_lock(lock, "tauri").as_deref(),
+            Some("2.11.6")
+        );
+        assert_eq!(
+            crate_version_in_lock(lock, "tauri-build").as_deref(),
+            Some("2.6.3")
+        );
+        assert_eq!(crate_version_in_lock(lock, "missing"), None);
+    }
 }
 
 fn major_minor(version: &str) -> String {
