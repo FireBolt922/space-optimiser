@@ -1,14 +1,14 @@
 #!/bin/sh
 # Sets the app version in every place that records it: the workspace
 # Cargo.toml (Tauri and the About screen read it from there), Cargo.lock,
-# and the desktop package.json and package-lock.json.
+# the desktop package.json and package-lock.json, and CHANGELOG.md, where
+# the Unreleased entries become the new version's section.
 #
 #   scripts/bump-version.sh 0.2.0
 #
-# The version must be MAJOR.MINOR.PATCH with no suffix: the Windows MSI
-# accepts only numbers. Mark a test build as a pre-release when running the
-# Release workflow instead. Commit the change through a pull request, then
-# run the workflow from main.
+# The Release workflow runs this for you and opens the pull request. The
+# version must be MAJOR.MINOR.PATCH with no suffix: the Windows MSI accepts
+# only numbers. A test build is a plain version published as a pre-release.
 set -eu
 
 new=${1:-}
@@ -30,8 +30,10 @@ awk -v new="$new" '!done && /^version = "/ { print "version = \"" new "\""; done
   "$repo/Cargo.toml" > "$tmp"
 mv "$tmp" "$repo/Cargo.toml"
 
-(cd "$repo" && cargo update --workspace --offline --quiet)
+# Only the workspace crates' own entries in Cargo.lock change.
+(cd "$repo" && cargo update --workspace --quiet)
 (cd "$repo/apps/desktop" && npm version "$new" --no-git-tag-version --allow-same-version >/dev/null)
+"$repo/scripts/roll-changelog.sh" "$new" "$old"
 
 echo "Version $old -> $new"
 echo "Check with: cargo test -p space-optimiser-engine --test packaging"

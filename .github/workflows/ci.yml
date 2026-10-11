@@ -1,11 +1,14 @@
 name: CI
 
 # Runs on every pull request and on every commit that lands on main. The
-# Release workflow refuses a commit without a green CI run.
+# Release and Publish workflows refuse a commit without a green CI run.
+# The Release workflow also starts it by hand on a release branch, because
+# a pull request opened with the workflow token does not start CI.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -123,6 +126,10 @@ jobs:
       - name: Commits on main are Conventional Commits
         if: github.event_name == 'push'
         run: npx commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}"
+
+      - name: Commits on the branch are Conventional Commits
+        if: github.event_name == 'workflow_dispatch'
+        run: npx commitlint --from "$(git merge-base origin/main HEAD)" --to HEAD
 
   dependencies:
     name: dependency licences and advisories
