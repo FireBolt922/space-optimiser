@@ -70,6 +70,11 @@ scripts/fixture-home.sh                # try a cleanup on a copy of the fixture 
 
 ## Pull requests
 
+`main` is protected by the rulesets in `.github/rulesets/` (importable from
+Settings → Rules → Rulesets): no direct pushes, squash merge only, and
+every CI job must pass on the latest commit. Release tags cannot be moved
+or deleted.
+
 - Keep a PR to one topic. Small PRs are reviewed quickly.
 - CI must be green on all three operating systems before merge.
 - Fill in the PR template. For an engine change, name the test that fails
