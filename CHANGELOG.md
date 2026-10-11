@@ -7,6 +7,8 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-11
+
 ### Added
 
 - Results are grouped under category buttons (Temporary files, Browsers,
@@ -41,5 +43,6 @@ unsigned installers for macOS, Ubuntu, and Windows.
 - The Trash folders are on the protected list, so the large-file report
   never looks inside them.
 
-[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FireBolt922/space-optimiser/releases/tag/v0.1.0
