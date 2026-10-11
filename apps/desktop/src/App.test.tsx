@@ -3,7 +3,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
-import { REPORT, XSS_NAME, deepScan, fakeEngine, finishedScan } from "./test/fakeEngine";
+import {
+  CANDIDATES,
+  REPORT,
+  XSS_NAME,
+  deepScan,
+  fakeEngine,
+  finishedScan,
+} from "./test/fakeEngine";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -237,7 +244,8 @@ describe("running and report", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     await waitFor(() => expect(engine.stopRun).toHaveBeenCalledWith(11));
-    expect(screen.getByText("1 of 2 items done")).toBeTruthy();
+    // Progress arrives from the next poll, after the click, and must survive it.
+    expect(await screen.findByText("1 of 2 items done")).toBeTruthy();
   });
 });
 
@@ -646,5 +654,122 @@ describe("about and help", () => {
     expect(text).toMatch(/does not upload/);
     expect(text).not.toContain(ABSOLUTE_PROMISE);
     expect(text).not.toMatch(/select all/i);
+  });
+});
+
+// Categories, filters, folded groups, and the sticky action bar.
+describe("categories and long lists", () => {
+  function manyTemp(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      ...CANDIDATES[0],
+      id: 100 + i,
+      display_name: `temp-${i}.tmp`,
+      estimated_bytes: 1000,
+    }));
+  }
+
+  it("category buttons show counts and filter the groups", async () => {
+    await toResults();
+    const categories = within(screen.getByRole("group", { name: "Categories" }));
+    expect(categories.getByRole("button", { name: "All (6)" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    fireEvent.click(categories.getByRole("button", { name: /^Browsers \(2/ }));
+    expect(screen.getByRole("region", { name: "Browser cache" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Temporary files" })).toBeNull();
+    expect(screen.queryByText("video.mov")).toBeNull();
+    fireEvent.click(categories.getByRole("button", { name: /^Large files \(1/ }));
+    expect(screen.getByText("video.mov")).toBeTruthy();
+    fireEvent.click(categories.getByRole("button", { name: "All (6)" }));
+    expect(screen.getByRole("region", { name: "Temporary files" })).toBeTruthy();
+  });
+
+  it("a selection survives a category change and counts the whole scan", async () => {
+    await toResults();
+    fireEvent.click(box("old-download.bin"));
+    const categories = within(screen.getByRole("group", { name: "Categories" }));
+    fireEvent.click(categories.getByRole("button", { name: /^Browsers/ }));
+    expect(screen.getByText(/1 item selected, about 2\.1 MB/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Review" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    fireEvent.click(categories.getByRole("button", { name: "All (6)" }));
+    expect(box("old-download.bin").checked).toBe(true);
+  });
+
+  it("the name filter narrows rows and says when nothing matches", async () => {
+    await toResults();
+    const filter = screen.getByLabelText("Filter by name");
+    fireEvent.change(filter, { target: { value: "VIDEO" } });
+    expect(screen.getByText("video.mov")).toBeTruthy();
+    expect(screen.queryByText("old-download.bin")).toBeNull();
+    fireEvent.change(filter, { target: { value: "nothing-here" } });
+    expect(screen.getByText("No items match this filter.")).toBeTruthy();
+  });
+
+  it("a long group folds after ten rows and Show all reveals the rest", async () => {
+    await toResults(fakeEngine({ scan: finishedScan({ candidates: manyTemp(14) }) }));
+    expect(screen.getAllByRole("checkbox").length).toBe(10);
+    const more = screen.getByRole("button", { name: "Show all 14 items in Temporary files" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(more);
+    expect(screen.getAllByRole("checkbox").length).toBe(14);
+    expect(screen.getByText("14 items, 14.0 KB")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer in Temporary files" }));
+    expect(screen.getAllByRole("checkbox").length).toBe(10);
+  });
+
+  it("Select safe items also selects rows that are folded away", async () => {
+    const engine = await toResults(
+      fakeEngine({ scan: finishedScan({ candidates: manyTemp(12) }) }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
+    expect(screen.getByText(/12 items selected/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    expect(engine.buildPlan.mock.calls[0][1].length).toBe(12);
+  });
+
+  it("the action bar on Results, Review, and Report is the sticky one", async () => {
+    await toResults();
+    const bar = screen.getByRole("button", { name: "Review" }).parentElement!;
+    expect(bar.className).toContain("actions-sticky");
+    expect(within(bar).getByText(/0 items selected/)).toBeTruthy();
+    fireEvent.click(box("old-download.bin"));
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    expect(screen.getByRole("button", { name: "Confirm" }).parentElement!.className).toContain(
+      "actions-sticky",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await screen.findByRole("heading", { name: "Report" });
+    expect(screen.getByRole("button", { name: "Done" }).parentElement!.className).toContain(
+      "actions-sticky",
+    );
+  });
+
+  it("a long report section starts folded with its count and size; Failed stays open", async () => {
+    const removed = Array.from({ length: 12 }, (_, i) => ({
+      ...REPORT.items[0],
+      candidate_id: 100 + i,
+      display_name: `temp-${i}.tmp`,
+      bytes_removed: 1000,
+    }));
+    const failed = Array.from({ length: 11 }, (_, i) => ({
+      ...REPORT.items[1],
+      candidate_id: 200 + i,
+      display_name: `stuck-${i}.tmp`,
+      outcome: "failed" as const,
+      detail: "in use",
+    }));
+    await toReport(
+      fakeEngine({ report: { ...REPORT, items: [...removed, ...failed], bytes_removed: 12_000 } }),
+    );
+    const removedSection = screen.getByRole("region", { name: "Removed" });
+    expect(within(removedSection).getByText("Removed (12 items, 12.0 KB)")).toBeTruthy();
+    expect(removedSection.querySelector("details")!.open).toBe(false);
+    const failedSection = screen.getByRole("region", { name: "Failed" });
+    expect(within(failedSection).getByText("Failed (11 items)")).toBeTruthy();
+    expect(failedSection.querySelector("details")!.open).toBe(true);
   });
 });

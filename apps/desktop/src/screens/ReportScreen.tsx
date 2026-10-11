@@ -60,6 +60,14 @@ const SECTIONS: { outcome: ReportItem["outcome"]; title: string }[] = [
   { outcome: "not_run", title: "Not run" },
 ];
 
+/** A section longer than this starts folded, with its count and size in the summary. */
+export const ITEMS_SHOWN = 10;
+
+/** Failures always stay open: they are the part a person must read. */
+function startsOpen(outcome: ReportItem["outcome"], count: number): boolean {
+  return outcome === "failed" || count <= ITEMS_SHOWN;
+}
+
 /** Free space and file sizes disagree by more than rounding. */
 function differs(volume: FreeSpace, removed: number): boolean {
   if (volume.before === null || volume.after === null) return false;
@@ -124,27 +132,33 @@ export function ReportScreen({ report, platform, onExport, onDone }: Props) {
       {SECTIONS.map(({ outcome, title }) => {
         const items = report.items.filter((i) => i.outcome === outcome);
         if (items.length === 0) return null;
+        const bytes = items.reduce((sum, i) => sum + i.bytes_removed, 0);
         return (
           <section key={outcome} className="card group" aria-label={title}>
-            <h2 className="title">{title}</h2>
-            <ul className="plain-list body-sm">
-              {items.map((item) => (
-                <li key={item.candidate_id}>
-                  <span className="file-name">{item.display_name}</span>
-                  {item.bytes_removed > 0 && <> — {formatBytes(item.bytes_removed)}</>}
-                  {item.detail && <>: {item.detail}</>}
-                </li>
-              ))}
-            </ul>
-            {(outcome === "removed" || outcome === "ran") &&
-              [...new Set(items.map((i) => i.recovery_text))].map(
-                (text) =>
-                  text && (
-                    <p key={text} className="body-sm ink-muted">
-                      {text}
-                    </p>
-                  ),
-              )}
+            <details open={startsOpen(outcome, items.length)}>
+              <summary className="title">
+                {title} ({plural(items.length, "item", "items")}
+                {bytes > 0 && `, ${formatBytes(bytes)}`})
+              </summary>
+              <ul className="plain-list body-sm">
+                {items.map((item) => (
+                  <li key={item.candidate_id}>
+                    <span className="file-name">{item.display_name}</span>
+                    {item.bytes_removed > 0 && <> — {formatBytes(item.bytes_removed)}</>}
+                    {item.detail && <>: {item.detail}</>}
+                  </li>
+                ))}
+              </ul>
+              {(outcome === "removed" || outcome === "ran") &&
+                [...new Set(items.map((i) => i.recovery_text))].map(
+                  (text) =>
+                    text && (
+                      <p key={text} className="body-sm ink-muted">
+                        {text}
+                      </p>
+                    ),
+                )}
+            </details>
           </section>
         );
       })}
@@ -164,7 +178,8 @@ export function ReportScreen({ report, platform, onExport, onDone }: Props) {
         </p>
       )}
 
-      <div className="actions">
+      {/* Stays at the bottom of the window, so a long report never hides it. */}
+      <div className="actions actions-sticky">
         {/* Always present, so screen readers announce the text when it appears. */}
         <p className="body-sm file-name action-status" role="status">
           {exported.kind === "saved" && `Saved to ${exported.file.path}`}

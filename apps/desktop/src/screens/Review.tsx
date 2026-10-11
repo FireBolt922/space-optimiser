@@ -54,7 +54,7 @@ export function Review({ plan, expired, busy, error, onBack, onConfirm, onScanAg
           {error}
         </p>
       )}
-      <div className="actions">
+      <div className="actions actions-sticky">
         <button type="button" className="button" onClick={onBack} disabled={busy}>
           Back
         </button>
