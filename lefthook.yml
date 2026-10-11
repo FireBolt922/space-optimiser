@@ -19,7 +19,7 @@ pre-commit:
       stage_fixed: true
     eslint:
       root: "apps/desktop/"
-      glob: "*.{ts,tsx}"
+      glob: "src/**/*.{ts,tsx}"
       run: npx eslint --max-warnings 0 {staged_files}
 
 commit-msg:
