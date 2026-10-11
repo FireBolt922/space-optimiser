@@ -18,9 +18,16 @@ minor version can change behaviour.
   Windows when it lies outside Local AppData.
 - The Trash folders are on the protected list, so the large-file report
   never looks inside them.
+- Results are grouped under category buttons (Temporary files, Browsers,
+  Developer tools, System caches, Logs, Large files) with a count and size
+  each, and a name filter narrows the rows.
+- A group longer than ten rows folds behind "Show all"; the report folds
+  long Removed and Skipped lists the same way, and Failed always stays open.
 
 ### Changed
 
+- The Review, Scan again, Export report, and Done buttons stay at the bottom
+  of the window instead of after the last row.
 - CI pins each action to a commit.
 
 ## [0.1.0] - Unreleased

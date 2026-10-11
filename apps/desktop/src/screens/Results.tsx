@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Candidate, type Note, type ScanView } from "../engine";
+import { CATEGORIES, categoryBytes, categoryOf, type CategoryId } from "../categories";
 import { formatBytes, plural, riskWord } from "../format";
 import { FolderIcon } from "../icons";
 
@@ -12,6 +13,9 @@ interface Props {
   /** Opens the file manager at a row. Sends the id only. */
   onReveal: (candidateId: number) => Promise<void>;
 }
+
+/** Rows shown per group before "Show all" (phase 7: a group, not a dump). */
+export const ROWS_SHOWN = 10;
 
 /** Deletes and tool commands can be selected; info and uncertain rows cannot. */
 function selectable(c: Candidate): boolean {
@@ -43,10 +47,38 @@ function actionWord(c: Candidate): string {
   }
 }
 
+interface Group {
+  label: string;
+  category: CategoryId;
+  rows: Candidate[];
+  notes: Note[];
+}
+
+/** One group per catalog row, in scan order, each tagged with its category. */
+function groupRows(scan: ScanView): Group[] {
+  const groups = new Map<string, Group>();
+  const group = (label: string, catalogId: string) => {
+    const found = groups.get(label) ?? {
+      label,
+      category: categoryOf(catalogId),
+      rows: [],
+      notes: [],
+    };
+    groups.set(label, found);
+    return found;
+  };
+  for (const c of scan.candidates) group(c.location_label, c.catalog_id).rows.push(c);
+  for (const n of scan.notes) group(n.location_label, n.catalog_id).notes.push(n);
+  return [...groups.values()];
+}
+
 export function Results({ scan, selected, onSelect, onReview, onScanAgain, onReveal }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
   const [revealErrors, setRevealErrors] = useState<Record<number, string>>({});
+  const [category, setCategory] = useState<CategoryId | "all">("all");
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const reveal = async (id: number) => {
     setRevealErrors((errors) => {
       const next = { ...errors };
@@ -60,18 +92,11 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
     }
   };
 
-  // One group per row: its candidates, and notes saying why it offers nothing more.
-  const groups = new Map<string, { rows: Candidate[]; notes: Note[] }>();
-  const group = (label: string) => {
-    const found = groups.get(label) ?? { rows: [], notes: [] };
-    groups.set(label, found);
-    return found;
-  };
-  for (const c of scan.candidates) group(c.location_label).rows.push(c);
-  for (const n of scan.notes) group(n.location_label).notes.push(n);
+  const groups = groupRows(scan);
   const chosen = new Set(selected);
   const toggle = (id: number) =>
     onSelect(chosen.has(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+  // Selection works on the whole scan, whatever is filtered out of view.
   const selectSafe = () => {
     const safe = scan.candidates.filter((c) => c.bulk_safe && selectable(c)).map((c) => c.id);
     onSelect([...new Set([...selected, ...safe])]);
@@ -92,6 +117,25 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
   const memoryRoot = scan.roots.some((r) => r.frees_memory);
   const quitFirst = scan.candidates.some((c) => c.labels.includes("quit_first"));
 
+  // Category tabs: only the categories this scan found, with count and size.
+  const categories = CATEGORIES.map((cat) => {
+    const rows = groups.filter((g) => g.category === cat.id).flatMap((g) => g.rows);
+    return { ...cat, count: rows.length, bytes: categoryBytes(rows) };
+  }).filter((cat) => cat.count > 0 || groups.some((g) => g.category === cat.id));
+  const needle = query.trim().toLowerCase();
+  const matches = (c: Candidate) => needle === "" || c.display_name.toLowerCase().includes(needle);
+  const shown = groups
+    .filter((g) => category === "all" || g.category === category)
+    .map((g) => ({ ...g, rows: g.rows.filter(matches) }))
+    .filter((g) => g.rows.length > 0 || (needle === "" && g.notes.length > 0));
+  const toggleExpanded = (label: string) =>
+    setExpanded((set) => {
+      const next = new Set(set);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+
   return (
     <section className="screen" aria-labelledby="results-title">
       <h1 id="results-title" className="title-xl" tabIndex={-1} ref={heading}>
@@ -110,11 +154,40 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
             <button type="button" className="button" onClick={selectSafe} disabled={!anySafe}>
               Select safe items
             </button>
-            <span className="body-sm ink-muted" aria-live="polite">
-              {plural(chosen.size, "item", "items")} selected, about {formatBytes(selectedBytes)}
-              {toolBytes > 0 && `. Tools may free up to ${formatBytes(toolBytes)} more.`}
-            </span>
+            <label className="search">
+              <span className="body-sm">Filter by name</span>
+              <input
+                type="search"
+                className="input"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
           </div>
+          {categories.length > 1 && (
+            <div className="chips" role="group" aria-label="Categories">
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={category === "all"}
+                onClick={() => setCategory("all")}
+              >
+                All ({scan.candidates.length})
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  className="chip"
+                  aria-pressed={category === cat.id}
+                  onClick={() => setCategory(cat.id)}
+                >
+                  {cat.title} ({cat.count}
+                  {cat.bytes > 0 && `, ${formatBytes(cat.bytes)}`})
+                </button>
+              ))}
+            </div>
+          )}
           {quitFirst && (
             <p className="body-sm ink-muted">
               A browser is open, so its cache is not offered. Quit the browser, then scan again.
@@ -131,65 +204,87 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
               Your temporary folder is in memory: cleaning it frees memory, not disk.
             </p>
           )}
-          {[...groups].map(([label, { rows, notes }]) => (
-            <section key={label} className="card group" aria-label={label}>
-              <h2 className="title">{label}</h2>
-              {rows.length > 0 && <p className="body-sm ink-muted">{rows[0].explanation}</p>}
-              {notes.map((n, i) => (
-                <p key={i} className="body-sm ink-muted">
-                  {n.text}
-                  {n.bytes !== null && ` (${formatBytes(n.bytes)})`}
-                </p>
-              ))}
-              <ul className="rows">
-                {rows.map((c) => (
-                  <li key={c.id} className="row">
-                    {c.action === "report" ? (
-                      <span className="row-name file-name">{c.display_name}</span>
-                    ) : (
-                      <label className="row-name">
-                        <input
-                          type="checkbox"
-                          aria-label={checkboxName(c)}
-                          checked={chosen.has(c.id)}
-                          disabled={!selectable(c)}
-                          onChange={() => toggle(c.id)}
-                        />
-                        <span className="file-name">{c.display_name}</span>
-                      </label>
-                    )}
-                    <span className="badge">{riskWord(c.risk)}</span>
-                    <span className="body-sm ink-muted row-action">{actionWord(c)}</span>
-                    <span className="body-sm row-size">
-                      {sizeText(c)}
-                      {c.labels.includes("shared") && " (shared, frees nothing)"}
+          {shown.length === 0 && <p className="body">No items match this filter.</p>}
+          {shown.map(({ label, rows, notes }) => {
+            const open = expanded.has(label) || rows.length <= ROWS_SHOWN;
+            const visible = open ? rows : rows.slice(0, ROWS_SHOWN);
+            return (
+              <section key={label} className="card group" aria-label={label}>
+                <div className="group-head">
+                  <h2 className="title">{label}</h2>
+                  {rows.length > 0 && (
+                    <span className="body-sm ink-muted">
+                      {plural(rows.length, "item", "items")}, {formatBytes(categoryBytes(rows))}
                     </span>
-                    {c.revealable ? (
-                      <button
-                        type="button"
-                        className="button button-sm"
-                        aria-label={`Show in folder: ${c.display_name}`}
-                        onClick={() => reveal(c.id)}
-                      >
-                        <FolderIcon />
-                        Show in folder
-                      </button>
-                    ) : (
-                      <span />
-                    )}
-                    {c.found_by && (
-                      <span className="body-sm ink-muted row-detail">{c.found_by}</span>
-                    )}
-                    {revealErrors[c.id] && (
-                      <p className="body-sm row-detail row-error" role="alert">
-                        {revealErrors[c.id]}
-                      </p>
-                    )}
-                  </li>
+                  )}
+                </div>
+                {rows.length > 0 && <p className="body-sm ink-muted">{rows[0].explanation}</p>}
+                {notes.map((n, i) => (
+                  <p key={i} className="body-sm ink-muted">
+                    {n.text}
+                    {n.bytes !== null && ` (${formatBytes(n.bytes)})`}
+                  </p>
                 ))}
-              </ul>
-            </section>
-          ))}
+                <ul className="rows">
+                  {visible.map((c) => (
+                    <li key={c.id} className="row">
+                      {c.action === "report" ? (
+                        <span className="row-name file-name">{c.display_name}</span>
+                      ) : (
+                        <label className="row-name">
+                          <input
+                            type="checkbox"
+                            aria-label={checkboxName(c)}
+                            checked={chosen.has(c.id)}
+                            disabled={!selectable(c)}
+                            onChange={() => toggle(c.id)}
+                          />
+                          <span className="file-name">{c.display_name}</span>
+                        </label>
+                      )}
+                      <span className="badge">{riskWord(c.risk)}</span>
+                      <span className="body-sm ink-muted row-action">{actionWord(c)}</span>
+                      <span className="body-sm row-size">
+                        {sizeText(c)}
+                        {c.labels.includes("shared") && " (shared, frees nothing)"}
+                      </span>
+                      {c.revealable ? (
+                        <button
+                          type="button"
+                          className="button button-sm"
+                          aria-label={`Show in folder: ${c.display_name}`}
+                          onClick={() => reveal(c.id)}
+                        >
+                          <FolderIcon />
+                          Show in folder
+                        </button>
+                      ) : (
+                        <span />
+                      )}
+                      {c.found_by && (
+                        <span className="body-sm ink-muted row-detail">{c.found_by}</span>
+                      )}
+                      {revealErrors[c.id] && (
+                        <p className="body-sm row-detail row-error" role="alert">
+                          {revealErrors[c.id]}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {rows.length > ROWS_SHOWN && (
+                  <button
+                    type="button"
+                    className="button button-sm group-more"
+                    aria-expanded={open}
+                    onClick={() => toggleExpanded(label)}
+                  >
+                    {open ? `Show fewer in ${label}` : `Show all ${rows.length} items in ${label}`}
+                  </button>
+                )}
+              </section>
+            );
+          })}
         </>
       )}
 
@@ -215,7 +310,16 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
         </details>
       )}
 
-      <div className="actions">
+      {/* Stays at the bottom of the window, so a long list never hides it. */}
+      <div className="actions actions-sticky">
+        <p className="body-sm action-status" aria-live="polite">
+          {scan.candidates.length > 0 && (
+            <>
+              {plural(chosen.size, "item", "items")} selected, about {formatBytes(selectedBytes)}
+              {toolBytes > 0 && `. Tools may free up to ${formatBytes(toolBytes)} more.`}
+            </>
+          )}
+        </p>
         <button type="button" className="button" onClick={onScanAgain}>
           Scan again
         </button>
