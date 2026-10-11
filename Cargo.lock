@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "space-optimiser-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "space-optimiser-engine",
  "tauri",
@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "space-optimiser-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "rustix",
