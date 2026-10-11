@@ -1,30 +1,106 @@
-name: Release bundles
+name: Release
 
-# Builds unsigned installers for each OS and stores them as workflow
-# artifacts. It does not sign, notarize, or publish anything: signing needs
-# certificates that are not in this repository, and a release page is made
-# by hand after the release checklist passes.
+# Builds installers for macOS, Ubuntu, and Windows and publishes them on a
+# GitHub release page. It runs only when started by hand from the Actions
+# tab (Run workflow), never on a push or a tag.
+#
+# The version comes from the workspace Cargo.toml; change it first with
+# scripts/bump-version.sh in a pull request. The release tag is
+# v<version> on the commit the workflow runs from, which must be on main
+# with a green CI run. Builds are unsigned: signing needs certificates that
+# are not in this repository.
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
+    inputs:
+      channel:
+        description: >-
+          prerelease: test build for testers (marked "Pre-release").
+          release: public release. draft: only you can see it.
+        type: choice
+        options: [prerelease, draft, release]
+        default: prerelease
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: check version and CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Run the Release workflow from main, not ${GITHUB_REF}." >&2
+          exit 1
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Cargo.toml version '$version' is not MAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          package=$(node -p 'require("./apps/desktop/package.json").version')
+          if [ "$package" != "$version" ]; then
+            echo "package.json is $package but Cargo.toml is $version. Run scripts/bump-version.sh." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The tag is new
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null; then
+            echo "v${VERSION} is already released. Run scripts/bump-version.sh, merge, and run again." >&2
+            exit 1
+          fi
+
+      # The tests ran in CI on this exact commit; a release never ships a
+      # commit whose CI failed or is still running.
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
+          if [ "$passed" -lt 1 ]; then
+            echo "CI has not passed on ${GITHUB_SHA}. Wait for the CI run on main to go green." >&2
+            exit 1
+          fi
+
   bundle:
-    name: bundle (${{ matrix.os }})
+    name: bundle (${{ matrix.name }})
+    needs: prepare
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - os: macos-latest
-            bundles: app,dmg
-          - os: ubuntu-22.04
-            bundles: deb
-          - os: windows-latest
-            bundles: nsis,msi
+          # One .dmg that runs on Apple silicon and Intel Macs.
+          - name: macOS
+            os: macos-latest
+            args: --target universal-apple-darwin --bundles dmg
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+          - name: Ubuntu
+            os: ubuntu-22.04
+            args: --bundles deb
+          - name: Windows
+            os: windows-latest
+            args: --bundles nsis,msi
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +110,7 @@ jobs:
         shell: bash
         run: |
           rustup show active-toolchain || rustup toolchain install
+          if [ -n "${{ matrix.rust_targets }}" ]; then rustup target add ${{ matrix.rust_targets }}; fi
           rustc --version
 
       - name: Install WebKitGTK (Ubuntu)
@@ -52,31 +129,96 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      # The bundle embeds the built UI, so build it before cargo tests the
-      # shell.
-      - name: Test UI
-        working-directory: apps/desktop
-        run: |
-          npm test
-          npm run build
-
-      - name: Test
-        run: cargo test --workspace --locked
-
       # `tauri build` runs `npm run build` itself (beforeBuildCommand).
-      - name: Build bundles
+      # macOS: an ad-hoc signature ("-") only. Without one, Apple silicon
+      # Macs report a downloaded app as damaged instead of offering
+      # "Open Anyway". It is not a Developer ID signature.
+      - name: Build installers
         working-directory: apps/desktop
-        run: npx tauri build --ci --bundles ${{ matrix.bundles }}
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        run: npx tauri build --ci ${{ matrix.args }}
 
       # Only the installers. Never audit logs, fixture homes, or test output.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir dist-release
+          find target -path '*/release/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
+            -exec cp {} dist-release/ \;
+          ls -l dist-release
+          test -n "$(ls dist-release)"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: space-optimiser-${{ matrix.os }}
-          path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app
-            target/release/bundle/deb/*.deb
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/msi/*.msi
+          name: installers-${{ matrix.name }}
+          path: dist-release/*
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: publish v${{ needs.prepare.outputs.version }}
+    needs: [prepare, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist-release
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          {
+            echo "Space Optimiser ${VERSION}."
+            echo
+            if [ "$CHANNEL" != release ]; then
+              echo "**Test build.** Not for general use yet."
+              echo
+            fi
+            echo "These installers are not signed. macOS and Windows warn before opening them."
+            echo "How to install, what to test, and how to report back:"
+            echo "[docs/testing-guide.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/docs/testing-guide.md)."
+            echo
+            echo "| System | File |"
+            echo "| --- | --- |"
+            echo "| macOS 14 or later (Apple silicon and Intel) | \`.dmg\` |"
+            echo "| Ubuntu 22.04 or later | \`.deb\` |"
+            echo "| Windows 11, 64-bit (Windows 10 best effort) | \`-setup.exe\` (or \`.msi\`) |"
+            echo
+            echo "Cleanups cannot be undone; files do not go to the Trash."
+            echo "Check a download against \`SHA256SUMS.txt\`."
+          } > notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          flags=""
+          case "$CHANNEL" in
+            prerelease) flags="--prerelease" ;;
+            draft) flags="--draft" ;;
+          esac
+          gh release create "v${VERSION}" dist-release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Space Optimiser ${VERSION}" \
+            --notes-file notes.md \
+            $flags

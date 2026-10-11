@@ -1,6 +1,6 @@
 # Space Optimiser
 
-Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. The current build cleans one thing: temporary files more than a day old, on macOS and Ubuntu.
+Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. It cleans a fixed list of caches and temporary files on macOS, Ubuntu, and Windows. Test builds are unsigned and not yet released for general use.
 
 The product is independent and general purpose. It is not tied to any existing project.
 
@@ -86,3 +86,13 @@ npm --prefix apps/desktop run tauri dev
 To try a cleanup without touching your own files, run `scripts/fixture-home.sh`. It copies the test fixture home into a temporary folder and prints the command that points a debug build at it. Release builds ignore that setting.
 
 CI runs the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows.
+
+## Releasing
+
+Releases are built only by hand, never on a push.
+
+1. Set the version (`MAJOR.MINOR.PATCH`, numbers only) with `scripts/bump-version.sh 0.2.0`, and merge it to main through a pull request.
+2. Wait for CI on main to go green.
+3. In GitHub, open Actions → Release → Run workflow on `main`, and pick a channel: `prerelease` for testers, `draft` to check the page first, or `release`.
+
+The workflow refuses to run if the version is already tagged or CI has not passed on that commit. It builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, then creates the `v<version>` tag and release page with a `SHA256SUMS.txt`. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md).

@@ -28,6 +28,24 @@ fn the_version_has_one_source() {
     let package: Value =
         serde_json::from_str(&fs::read_to_string(desktop().join("package.json")).unwrap()).unwrap();
     assert_eq!(package["version"], env!("CARGO_PKG_VERSION"));
+    let lock: Value =
+        serde_json::from_str(&fs::read_to_string(desktop().join("package-lock.json")).unwrap())
+            .unwrap();
+    assert_eq!(lock["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(lock["packages"][""]["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn the_version_is_plain_major_minor_patch() {
+    // The Windows MSI accepts only numeric versions, so a test build is a
+    // plain version marked as a pre-release on GitHub, not `1.0.0-beta`.
+    let parts: Vec<u32> = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .map(|p| p.parse().expect("each version part is a number"))
+        .collect();
+    assert_eq!(parts.len(), 3, "version must be MAJOR.MINOR.PATCH");
+    // MSI limits: MAJOR and MINOR up to 255, PATCH up to 65535.
+    assert!(parts[0] <= 255 && parts[1] <= 255 && parts[2] <= 65535);
 }
 
 #[test]
