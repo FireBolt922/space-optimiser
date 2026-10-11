@@ -5,9 +5,7 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
-use space_optimiser_engine::model::{ExecutePlanArgs, ExecuteStart, PlanRef, RunView};
+use space_optimiser_engine::model::{ExecutePlanArgs, ExecuteStart, PlanRef};
 
 fn start(engine: &space_optimiser_engine::Engine, names: &[&str], deep: bool) -> PlanRef {
     let view = if deep {
@@ -27,23 +25,6 @@ fn start(engine: &space_optimiser_engine::Engine, names: &[&str], deep: bool) ->
     assert_eq!(started, ExecuteStart::Started);
     PlanRef {
         plan_id: plan.plan_id,
-    }
-}
-
-/// Polls until `done` holds, or panics after 20 s.
-fn poll_until(
-    engine: &space_optimiser_engine::Engine,
-    plan: PlanRef,
-    done: impl Fn(&RunView) -> bool,
-) -> RunView {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let view = engine.get_run(plan).unwrap();
-        if done(&view) {
-            return view;
-        }
-        assert!(Instant::now() < deadline, "gave up waiting: {view:?}");
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -72,7 +53,25 @@ fn a_finished_run_lists_each_item_with_counts_and_no_current_item() {
 #[cfg(unix)]
 mod tools {
     use super::*;
-    use space_optimiser_engine::model::SkipCause;
+    use space_optimiser_engine::model::{RunView, SkipCause};
+    use std::time::{Duration, Instant};
+
+    /// Polls until `done` holds, or panics after 20 s.
+    fn poll_until(
+        engine: &space_optimiser_engine::Engine,
+        plan: PlanRef,
+        done: impl Fn(&RunView) -> bool,
+    ) -> RunView {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let view = engine.get_run(plan).unwrap();
+            if done(&view) {
+                return view;
+            }
+            assert!(Instant::now() < deadline, "gave up waiting: {view:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn a_running_tool_shows_the_command_and_what_it_prints() {
