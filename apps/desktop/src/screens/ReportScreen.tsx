@@ -114,8 +114,8 @@ export function ReportScreen({ report, platform, onExport, onDone }: Props) {
               <p className="body-sm ink-muted">
                 Free space changed by {formatBytes(Math.abs(volume.after - volume.before))}. The
                 files removed were about {formatBytes(report.bytes_removed)}. These numbers differ
-                because {causes(platform)}. Files that share data with other files, and other
-                apps writing at the same time, change the number too.
+                because {causes(platform)}. Files that share data with other files, and other apps
+                writing at the same time, change the number too.
               </p>
             )}
         </div>
@@ -152,7 +152,9 @@ export function ReportScreen({ report, platform, onExport, onDone }: Props) {
       {report.audit_log === "memory_only" && (
         <details className="card">
           <summary className="heading">Audit log (not saved to disk)</summary>
-          <pre className="code log" tabIndex={0} aria-label="Audit log lines">{report.memory_log.join("\n")}</pre>
+          <pre className="code log" tabIndex={0} aria-label="Audit log lines">
+            {report.memory_log.join("\n")}
+          </pre>
         </details>
       )}
 

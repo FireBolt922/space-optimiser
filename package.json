@@ -1,0 +1,18 @@
+{
+  "name": "space-optimiser-tooling",
+  "private": true,
+  "license": "MIT",
+  "description": "Repository tooling only: git hooks, commit linting, and formatting. The app lives in apps/desktop and crates/engine.",
+  "scripts": {
+    "prepare": "lefthook install",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "lefthook": "2.2.1",
+    "prettier": "3.9.10"
+  }
+}

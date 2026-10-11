@@ -472,6 +472,8 @@ pub enum RootRejection {
     ContainsProtectedFolder,
     #[error("the temporary folder belongs to another user")]
     NotOwnedByUser,
+    #[error("the temporary folder is a project folder")]
+    IsProject,
 }
 
 /// A root that passed validation. Only [`validate_temp_root`] and
@@ -754,6 +756,11 @@ impl Context {
         }
     }
 
+    /// The area a temp root must lie under, when the platform names one.
+    pub fn required_temp_area(&self) -> Option<&Path> {
+        self.required_temp_area.as_deref()
+    }
+
     pub fn temp_roots(&self) -> &[(PathBuf, OwnerRule)] {
         &self.temp_roots
     }
@@ -860,11 +867,29 @@ pub fn validate_temp_root(
     if owner == OwnerRule::Root && !crate::platform::owned_by_user(ctx, &canonical, &metadata) {
         return Err(RootRejection::NotOwnedByUser);
     }
+    // A temp variable can point at a source tree. The entry rule skips a
+    // project inside the temp folder; this catches the folder itself.
+    if directly_contains_project_marker(&canonical)? {
+        return Err(RootRejection::IsProject);
+    }
     Ok(ValidRoot {
         path: canonical,
         id,
         owner,
     })
+}
+
+/// True when `dir` directly holds a project marker (`.git`, `Cargo.toml`,
+/// ...). Reads one directory listing and follows nothing.
+fn directly_contains_project_marker(dir: &Path) -> Result<bool, RootRejection> {
+    let entries = fs::read_dir(dir).map_err(|_| RootRejection::Unreadable)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| RootRejection::Unreadable)?;
+        if is_project_marker(&entry.file_name()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Checks a cache folder found by [`crate::roots`]: a real folder, not a

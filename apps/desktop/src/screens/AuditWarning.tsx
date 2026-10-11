@@ -17,8 +17,8 @@ export function AuditWarning({ diskFull, onBack, onContinue }: Props) {
           : "The audit log could not be written."}
       </p>
       <p className="body-sm ink-muted">
-        Nothing has been removed. If you continue, the log is kept in memory and shown in the
-        report instead of being saved. This cannot be undone.
+        Nothing has been removed. If you continue, the log is kept in memory and shown in the report
+        instead of being saved. This cannot be undone.
       </p>
       <div className="actions">
         <button type="button" className="button" onClick={onBack}>

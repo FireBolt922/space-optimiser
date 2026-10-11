@@ -1,0 +1,6 @@
+# Every change is reviewed by the maintainer. Engine and workflow changes
+# are listed explicitly so the requirement is visible.
+*                       @FireBolt922
+/crates/engine/         @FireBolt922
+/.github/workflows/     @FireBolt922
+/SECURITY.md            @FireBolt922

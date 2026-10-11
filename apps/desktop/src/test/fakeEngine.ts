@@ -163,7 +163,9 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
     duration_ms: 240,
     error: null,
     candidates: CANDIDATES,
-    skipped: [{ display_name: "fresh.part", reason: "fresh", detail: "it changed within the last day" }],
+    skipped: [
+      { display_name: "fresh.part", reason: "fresh", detail: "it changed within the last day" },
+    ],
     roots: [{ location_label: "Temporary files", skipped: null, frees_memory: false }],
     notes: [],
     ...over,
@@ -172,18 +174,20 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
 
 export function planFor(ids: number[]): Plan {
   const all = [...CANDIDATES, ...DEEP_CANDIDATES];
-  const items = all.filter((c) => ids.includes(c.id)).map((c) => ({
-    candidate_id: c.id,
-    catalog_id: c.catalog_id,
-    display_name: c.display_name,
-    action_text:
-      c.action === "run_tool"
-        ? "Run the tool's own clean command."
-        : "Delete this item from your temporary folder. Everything in it is more than a day old.",
-    estimated_bytes: c.estimated_bytes,
-    upper_bound_bytes: c.upper_bound_bytes,
-    file_count: c.file_count,
-  }));
+  const items = all
+    .filter((c) => ids.includes(c.id))
+    .map((c) => ({
+      candidate_id: c.id,
+      catalog_id: c.catalog_id,
+      display_name: c.display_name,
+      action_text:
+        c.action === "run_tool"
+          ? "Run the tool's own clean command."
+          : "Delete this item from your temporary folder. Everything in it is more than a day old.",
+      estimated_bytes: c.estimated_bytes,
+      upper_bound_bytes: c.upper_bound_bytes,
+      file_count: c.file_count,
+    }));
   return {
     plan_id: 11,
     scan_id: 7,

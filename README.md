@@ -1,5 +1,9 @@
 # Space Optimiser
 
+[![CI](https://github.com/FireBolt922/space-optimiser/actions/workflows/ci.yml/badge.svg)](https://github.com/FireBolt922/space-optimiser/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Conventional Commits](https://img.shields.io/badge/commits-conventional-fe5196.svg)](https://www.conventionalcommits.org/en/v1.0.0/)
+
 Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. It cleans a fixed list of caches and temporary files on macOS, Ubuntu, and Windows. Test builds are unsigned and not yet released for general use.
 
 The product is independent and general purpose. It is not tied to any existing project.
@@ -56,13 +60,19 @@ Tauri was chosen because the interface cannot use Node to delete files on its ow
 
 ## Status
 
-First vertical slice (milestone M3). The window scans temporary files, shows what it found and what it left alone, and runs a confirmed cleanup. Before each delete, the engine re-checks every entry against the scan record. It deletes through directory handles and never follows a link. It writes a local audit log and reports the change in free space. Execution works on macOS and Ubuntu. On Windows it scans but does not delete yet. Other cleanups (browser caches, developer caches, logs) are not built yet. There is no installer.
+Milestones M1 to M7 are merged: the engine, the Normal and Deep Scan rows below, the review and confirm flow, handle-relative deletion with an audit log, the About and Help screens, and the release workflow. No version has been tagged yet; the first pre-release for testers is next, one operating system at a time. Windows CI is being fixed before that.
 
-Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it.
+**Normal Scan** offers old files in the per-user temporary folder, the HTTP caches of Chrome, Edge, Brave, Chromium, and Firefox (only when the browser is not running), and on Ubuntu the thumbnail and font caches.
+
+**Deep Scan** adds developer caches (npm, npx, pnpm, Yarn, pip, uv, Cargo, Gradle, NuGet), old log files on macOS, the Docker build cache when Docker runs locally, and a list of large files in the home folder. The large-file list is information only.
+
+"Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan).
+
+Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it; the catalog of cleanup rules is summarised in `docs/release-notes-draft.md` and in the engine's `crates/engine/src/policy.rs`.
 
 ## Development
 
-Agents working in this repository must follow [AGENTS.md](AGENTS.md).
+Everyone working in this repository follows [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md). Security problems go through [SECURITY.md](SECURITY.md), never a public issue.
 
 ```text
 Cargo.toml                 workspace
@@ -75,6 +85,7 @@ fixtures/homes/            fake home directories for tests
 Requirements: Rust 1.88 (pinned in `rust-toolchain.toml`), Node 24, and on Ubuntu `libwebkit2gtk-4.1-dev`.
 
 ```sh
+npm ci                                 # root tooling: git hooks, commitlint, prettier
 npm --prefix apps/desktop ci
 npm --prefix apps/desktop run lint
 npm --prefix apps/desktop test         # component tests with a fake engine
@@ -83,9 +94,11 @@ cargo test --workspace
 npm --prefix apps/desktop run tauri dev
 ```
 
+The root `npm ci` installs [lefthook](https://github.com/evilmartians/lefthook) hooks: formatting and lint on commit, Conventional Commits on the message, and clippy plus the full test suite on push. Branch names are `<type>/<topic>`.
+
 To try a cleanup without touching your own files, run `scripts/fixture-home.sh`. It copies the test fixture home into a temporary folder and prints the command that points a debug build at it. Release builds ignore that setting.
 
-CI runs the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows.
+CI runs on every pull request and on `main`: the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows; Prettier and commit-message checks; `cargo deny` and `npm audit`; and a coverage report. All of it must be green before a merge. Dependabot opens weekly update PRs.
 
 ## Releasing
 
@@ -96,3 +109,9 @@ Releases are built only by hand, never on a push.
 3. In GitHub, open Actions → Release → Run workflow on `main`, and pick a channel: `prerelease` for testers, `draft` to check the page first, or `release`.
 
 The workflow refuses to run if the version is already tagged or CI has not passed on that commit. It builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, then creates the `v<version>` tag and release page with a `SHA256SUMS.txt`. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md).
+
+Every release adds a section to [CHANGELOG.md](CHANGELOG.md).
+
+## Licence
+
+Space Optimiser is released under the [MIT License](LICENSE). The bundled Inter typeface is under the [SIL Open Font License 1.1](apps/desktop/src/assets/fonts/OFL.txt).

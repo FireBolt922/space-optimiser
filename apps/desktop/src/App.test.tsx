@@ -146,7 +146,10 @@ describe("results", () => {
 
   it("focus moves to the results heading", async () => {
     await toResults();
-    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Results" }));
+    // The heading renders before its focus effect runs, so wait for focus.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Results" })),
+    );
   });
 
   it("an empty scan says there is nothing to clean", async () => {
@@ -258,7 +261,9 @@ describe("deep scan", () => {
     const row = box("~/Library/pnpm/store/v3").closest("li") as HTMLElement;
     expect(within(row).getByText("Up to 3.0 MB")).toBeTruthy();
     expect(within(row).getByText("Clean with the tool")).toBeTruthy();
-    expect(within(row).getByText("Folder from `pnpm store path`; pnpm found on PATH.")).toBeTruthy();
+    expect(
+      within(row).getByText("Folder from `pnpm store path`; pnpm found on PATH."),
+    ).toBeTruthy();
   });
 
   it("Select safe items leaves tool rows, package caches, and default folders alone", async () => {
@@ -355,11 +360,13 @@ describe("accessibility", () => {
   // Phase 11 test 1: the checkbox exposes name, risk, and size in one name.
   it("result checkboxes are named with the row name, risk, and size", async () => {
     await toResults();
-    expect(screen.getByRole("checkbox", { name: "old-download.bin, Low risk, 2.1 MB" })).toBeTruthy();
-    expect(screen.getByRole("checkbox", { name: "Browser cache, Medium risk, 4.1 KB" })).toBeTruthy();
     expect(
-      screen.getByRole("checkbox", { name: `${XSS_NAME}, Low risk, 4.1 KB` }),
+      screen.getByRole("checkbox", { name: "old-download.bin, Low risk, 2.1 MB" }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "Browser cache, Medium risk, 4.1 KB" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: `${XSS_NAME}, Low risk, 4.1 KB` })).toBeTruthy();
   });
 
   it("a tool row's checkbox names its upper bound", async () => {
@@ -439,7 +446,9 @@ describe("report export and explanation", () => {
 
   it("an export error is shown", async () => {
     await toReport(
-      fakeEngine({ exportError: { kind: "export_failed", message: "could not save the report: disk full" } }),
+      fakeEngine({
+        exportError: { kind: "export_failed", message: "could not save the report: disk full" },
+      }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Export report" }));
     expect((await screen.findByRole("alert")).textContent).toBe(
@@ -481,12 +490,11 @@ describe("sidebar", () => {
   it("has the four views and marks the current one", async () => {
     render(<App engine={fakeEngine()} />);
     const main = screen.getByRole("navigation", { name: "Main" });
-    expect(within(main).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Clean up",
-      "Settings",
-      "Help",
-      "About",
-    ]);
+    expect(
+      within(main)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Clean up", "Settings", "Help", "About"]);
     expect(nav("Clean up").getAttribute("aria-current")).toBe("page");
     fireEvent.click(nav("Help"));
     expect(nav("Help").getAttribute("aria-current")).toBe("page");
@@ -501,7 +509,9 @@ describe("sidebar", () => {
   it("a view change moves focus to that view's heading", async () => {
     render(<App engine={fakeEngine()} />);
     fireEvent.click(nav("Settings"));
-    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1, name: "Settings" }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { level: 1, name: "Settings" }),
+    );
     fireEvent.click(nav("Clean up"));
     expect(document.activeElement).toBe(
       screen.getByRole("heading", { level: 1, name: "Free up space safely" }),
@@ -538,7 +548,10 @@ describe("theme", () => {
       removeEventListener: (_: string, fn: (e: { matches: boolean }) => void) =>
         listeners.splice(listeners.indexOf(fn), 1),
     };
-    vi.stubGlobal("matchMedia", vi.fn(() => query));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => query),
+    );
     return (matches: boolean) => {
       query.matches = matches;
       for (const fn of [...listeners]) fn({ matches });
@@ -609,6 +622,8 @@ describe("about and help", () => {
     expect(text).toContain("You can delete this file yourself. Space Optimiser does not clean it.");
     expect(text).toContain("This version does not update itself.");
     expect(text).toContain("SIL Open Font License");
+    expect(text).toContain("MIT License");
+    expect(text).toContain("Permission is hereby granted, free of charge");
     expect(text).not.toContain(ABSOLUTE_PROMISE);
   });
 

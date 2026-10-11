@@ -15,8 +15,8 @@ export function Start({ notice, interrupted, onDismissInterrupted, onScan }: Pro
         Free up space safely
       </h1>
       <p className="body ink-muted">
-        Space Optimiser only removes files in locations it has a reviewed rule for, and only
-        after you confirm.
+        Space Optimiser only removes files in locations it has a reviewed rule for, and only after
+        you confirm.
       </p>
 
       {interrupted && (

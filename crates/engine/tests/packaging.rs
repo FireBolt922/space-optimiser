@@ -7,8 +7,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 fn desktop() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop")
+    repo_root().join("apps/desktop")
 }
 
 fn tauri_conf() -> Value {
@@ -108,6 +112,18 @@ fn windows_uses_the_webview2_bootstrapper_and_no_signing_secrets() {
             .is_none_or(Value::is_null)
     );
     assert!(windows.get("signCommand").is_none_or(Value::is_null));
+}
+
+#[test]
+fn the_app_licence_ships_with_the_app() {
+    let resources = &tauri_conf()["bundle"]["resources"];
+    assert_eq!(resources["../../../LICENSE"], "licences/LICENSE.txt");
+    let text = fs::read_to_string(repo_root().join("LICENSE")).unwrap();
+    assert!(text.starts_with("MIT License"));
+    let cargo = fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
+    assert!(cargo.contains("license = \"MIT\""));
+    let package = fs::read_to_string(repo_root().join("apps/desktop/package.json")).unwrap();
+    assert!(package.contains("\"license\": \"MIT\""));
 }
 
 #[test]

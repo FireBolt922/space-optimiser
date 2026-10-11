@@ -122,9 +122,8 @@ export function Results({ scan, selected, onSelect, onReview, onScanAgain, onRev
           )}
           {leftOut > 0 && (
             <p className="body-sm ink-muted">
-              {plural(leftOut, "other item was", "other items were")} left unselected. They need
-              a separate choice because they cause a re-download or remove a cache a browser is
-              using.
+              {plural(leftOut, "other item was", "other items were")} left unselected. They need a
+              separate choice because they cause a re-download or remove a cache a browser is using.
             </p>
           )}
           {memoryRoot && (

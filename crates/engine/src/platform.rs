@@ -60,6 +60,9 @@ const PROTECTED_UNDER_HOME: &[&str] = &[
     "Library/Keychains",
     "Dropbox",
     "Google Drive",
+    // The Trash is never emptied and never searched (catalog denylist).
+    ".Trash",
+    ".local/share/Trash",
 ];
 
 /// The standard protected folders under `home`, the XDG user folders from
@@ -375,7 +378,9 @@ mod sys {
             // The scan deduplicates the two roots by file identity.
             temp_roots.push((local.join("Temp"), OwnerRule::Root));
         }
-        let ctx = Context::new(home, protected, temp_roots, None);
+        // `TEMP` can point anywhere, so a root outside Local AppData is
+        // rejected, as a macOS root outside `/private/var/folders` is.
+        let ctx = Context::new(home, protected, temp_roots, local.clone());
         // Browser caches and Explorer's thumbnails live here (phase 5).
         Ok(match local {
             Some(local) => ctx.with_local_app_data(local),

@@ -4,7 +4,7 @@ Read this file and the relevant plan before changing the repository.
 
 ## Plans
 
-- Planning notes are kept locally and are not tracked in git. The ignored location is listed in `.gitignore`. If the notes exist on this machine, read their README before implementing. If they do not exist, ask for them before writing application code.
+- Planning notes are kept locally and are not tracked in git. The ignored location is listed in `.gitignore`. If the notes exist on this machine, read their README before implementing. If they do not exist, ask for them before writing application code. An outside contributor without the notes works from an agreed issue instead (see `CONTRIBUTING.md`), and the maintainer updates the notes when merging.
 - Start with the implementation-plan overview, then the phase you are executing.
 - The history note records past manual cleanups. Do not turn a past manual action into a product feature unless the cleanup catalog marks it as allowed.
 - Stay inside the current phase. Do not start a later phase's features early.
@@ -20,6 +20,13 @@ Read this file and the relevant plan before changing the repository.
 - Do not empty the Trash or Recycle Bin, prune container volumes, delete virtual-disk images, or edit database rows.
 - Select All may include only items the catalog marks as bulk-safe.
 - Never claim space was recovered unless a test or a measurement in the session shows it.
+
+## Commits, branches, and hooks
+
+- Branch names are `<type>/<topic>` (`fix/temp-root-project-marker`). Commit messages and pull request titles follow Conventional Commits with the types and scopes in `commitlint.config.cjs`. Pull requests are squash-merged.
+- `npm ci` at the repository root installs the lefthook hooks. Never commit or push with `--no-verify`. If a hook fails, fix the cause.
+- `CHANGELOG.md` gets a line under **Unreleased** for every user-visible change.
+- CI must be green on macOS, Ubuntu, and Windows before a merge. A new GitHub Action is pinned to a commit SHA with its version in a comment.
 
 ## Build discipline
 
