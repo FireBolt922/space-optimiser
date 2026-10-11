@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Conventional Commits](https://img.shields.io/badge/commits-conventional-fe5196.svg)](https://www.conventionalcommits.org/en/v1.0.0/)
 
+**Download:** [firebolt922.github.io/space-optimiser](https://firebolt922.github.io/space-optimiser/) lists the latest build for each system and every earlier one.
+
 Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. It cleans a fixed list of caches and temporary files on macOS, Ubuntu, and Windows. Test builds are unsigned and not yet released for general use.
 
 The product is independent and general purpose. It is not tied to any existing project.
@@ -79,6 +81,7 @@ Cargo.toml                 workspace
 crates/engine/             scan, policy, measure, execute (the only deleter)
 apps/desktop/              React UI
 apps/desktop/src-tauri/    thin Tauri shell: typed commands, no file logic
+site/                      download page for GitHub Pages, built from the releases
 fixtures/homes/            fake home directories for tests
 ```
 
@@ -109,6 +112,10 @@ Releases start from the Actions tab, never from a push to `main`.
 3. Merge that pull request when CI is green. The Publish workflow then builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, creates the `vX.Y.Z` tag, and publishes the release page with the changelog section and a `SHA256SUMS.txt`.
 
 The workflows refuse a version that is already tagged, a commit whose CI has not passed, and a changelog with nothing under **Unreleased**. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md). To retry a build that failed after the merge, run Actions → Publish → Run workflow on `main`.
+
+After a release, Publish starts the Pages workflow, which rebuilds the [download page](https://firebolt922.github.io/space-optimiser/) from the published releases (drafts are left out). It also runs daily and when `site/` changes, so a release edited by hand shows up within a day, or at once with Actions → Pages → Run workflow. To preview the page locally: `node site/build.mjs --repo FireBolt922/space-optimiser --out _site`, then open `_site/index.html`.
+
+The download page needs Settings → Pages → Source set to "GitHub Actions". A custom domain is set on the same settings page; the page uses relative links, so nothing in the repository changes.
 
 The Release workflow opens pull requests, so Settings → Actions → General → Workflow permissions must allow GitHub Actions to create and approve pull requests.
 

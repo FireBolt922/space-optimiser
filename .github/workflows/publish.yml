@@ -201,6 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write # start the Pages workflow
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -266,3 +267,10 @@ jobs:
             --notes-file notes.md \
             $flags
           echo "Released v${VERSION} (${CHANNEL})" >> "$GITHUB_STEP_SUMMARY"
+
+      # A release created with the workflow token does not start other
+      # workflows, so the download page is rebuilt here. Drafts stay off it.
+      - name: Update the download page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main

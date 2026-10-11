@@ -14,6 +14,9 @@ minor version can change behaviour.
   each, and a name filter narrows the rows.
 - A group longer than ten rows folds behind "Show all"; the report folds
   long Removed and Skipped lists the same way, and Failed always stays open.
+- A download page on GitHub Pages shows the latest installers for macOS,
+  Ubuntu, and Windows, how to open an unsigned build, and earlier releases.
+  It is rebuilt after every release.
 
 ### Changed
 
