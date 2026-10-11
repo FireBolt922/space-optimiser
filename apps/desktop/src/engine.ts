@@ -86,8 +86,7 @@ export interface Plan {
 }
 
 export type ExecuteStart =
-  | { status: "started" }
-  | { status: "audit_log_unavailable"; disk_full: boolean };
+  { status: "started" } | { status: "audit_log_unavailable"; disk_full: boolean };
 
 export interface ReportItem {
   candidate_id: number;

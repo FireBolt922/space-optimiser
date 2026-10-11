@@ -14,10 +14,13 @@ const tokensCss = readFileSync(new URL("./styles/tokens.css", import.meta.url), 
 
 type Tokens = Map<string, string>;
 
+// Prettier puts each selector of a list on its own line; compare on one line.
+const flatCss = tokensCss.replace(/,\s*\n\s*/g, ", ");
+
 function block(selector: string): string {
-  const start = tokensCss.indexOf(`${selector} {`);
+  const start = flatCss.indexOf(`${selector} {`);
   if (start < 0) throw new Error(`no block for ${selector}`);
-  return tokensCss.slice(start, tokensCss.indexOf("}", start));
+  return flatCss.slice(start, flatCss.indexOf("}", start));
 }
 
 function declarations(css: string): Tokens {

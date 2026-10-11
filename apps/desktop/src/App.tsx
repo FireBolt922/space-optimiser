@@ -41,7 +41,14 @@ type Screen =
       busy: boolean;
       error?: string;
     }
-  | { kind: "audit"; scan: ScanView; selected: number[]; plan: Plan; token: string; diskFull: boolean }
+  | {
+      kind: "audit";
+      scan: ScanView;
+      selected: number[];
+      plan: Plan;
+      token: string;
+      diskFull: boolean;
+    }
   | { kind: "running"; planId: number; done: number; total: number; stopping: boolean }
   | { kind: "report"; report: Report };
 
@@ -185,8 +192,7 @@ export default function App({ engine }: { engine: Engine }) {
         });
       }
     } catch (e) {
-      const expired =
-        isEngineError(e) && (e.kind === "plan_expired" || e.kind === "unknown_plan");
+      const expired = isEngineError(e) && (e.kind === "plan_expired" || e.kind === "unknown_plan");
       setScreen({ ...current, busy: false, expired, error: errorMessage(e) });
     }
   };
@@ -260,12 +266,7 @@ export default function App({ engine }: { engine: Engine }) {
         />
       )}
       {screen.kind === "running" && (
-        <Running
-          done={screen.done}
-          total={screen.total}
-          stopping={screen.stopping}
-          onStop={stop}
-        />
+        <Running done={screen.done} total={screen.total} stopping={screen.stopping} onStop={stop} />
       )}
       {screen.kind === "report" && (
         <ReportScreen

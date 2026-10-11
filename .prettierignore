@@ -1,0 +1,20 @@
+# Generated or vendored
+node_modules/
+target/
+dist/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/icons/
+apps/desktop/src/assets/
+package-lock.json
+apps/desktop/package-lock.json
+Cargo.lock
+
+# Test fixtures are data, byte for byte
+fixtures/
+
+# Local planning notes (ignored by git)
+develop-eggs/
+
+# Third-party text kept verbatim
+CODE_OF_CONDUCT.md
+LICENSE

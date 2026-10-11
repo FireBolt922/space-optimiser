@@ -5,11 +5,11 @@ Do not publish a section for an operating system that was not tested.
 
 ## Tested on
 
-| OS | Version tested | Package | Status |
-| --- | --- | --- | --- |
-| macOS | TBD | `.dmg` (and `.app`) | Not yet tested on macOS. |
-| Ubuntu | TBD | `.deb` | Not yet tested on Ubuntu. |
-| Windows | TBD | `.exe` (NSIS) and `.msi` | Not yet tested on Windows. |
+| OS      | Version tested | Package                  | Status                     |
+| ------- | -------------- | ------------------------ | -------------------------- |
+| macOS   | TBD            | `.dmg` (and `.app`)      | Not yet tested on macOS.   |
+| Ubuntu  | TBD            | `.deb`                   | Not yet tested on Ubuntu.  |
+| Windows | TBD            | `.exe` (NSIS) and `.msi` | Not yet tested on Windows. |
 
 Releases go out one OS at a time: macOS, then Ubuntu, then Windows. A
 release names only the OSes it tested. Remove a row before publishing if

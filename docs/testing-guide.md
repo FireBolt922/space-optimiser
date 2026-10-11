@@ -13,10 +13,10 @@ before you press the final confirm button.
 1. Open the release page you were sent (a "Pre-release" on GitHub).
 2. Download the file for your computer:
 
-   | Your computer | File |
-   | --- | --- |
-   | Mac with macOS 14 or later | the `.dmg` |
-   | Ubuntu 22.04 or later | the `.deb` |
+   | Your computer                        | File                            |
+   | ------------------------------------ | ------------------------------- |
+   | Mac with macOS 14 or later           | the `.dmg`                      |
+   | Ubuntu 22.04 or later                | the `.deb`                      |
    | Windows 11 (Windows 10 also welcome) | the file ending in `-setup.exe` |
 
 3. Optional: compare the file's SHA-256 with `SHA256SUMS.txt` on the same

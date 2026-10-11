@@ -21,9 +21,9 @@ export function Help({ info }: Props) {
           browser caches.
         </p>
         <p className="body-sm">
-          Deep Scan is for developers. It does everything Normal Scan does, and also checks
-          package caches, old logs, and Docker&apos;s build cache, and lists large files. Large
-          files are shown so you can decide; they are never removed.
+          Deep Scan is for developers. It does everything Normal Scan does, and also checks package
+          caches, old logs, and Docker&apos;s build cache, and lists large files. Large files are
+          shown so you can decide; they are never removed.
         </p>
         <p className="body-sm ink-muted">
           A scan only looks. Nothing is removed until you review the list and confirm.
@@ -35,8 +35,8 @@ export function Help({ info }: Props) {
           What Select safe items includes
         </h2>
         <p className="body-sm">
-          Select safe items ticks only Low risk items that apps recreate on their own, such as
-          old temporary files, thumbnails, and old log files.
+          Select safe items ticks only Low risk items that apps recreate on their own, such as old
+          temporary files, thumbnails, and old log files.
         </p>
         <p className="body-sm">
           It leaves out items that cause a download again or that a browser is using, such as
@@ -60,19 +60,19 @@ export function Help({ info }: Props) {
           Why free space can change by a different amount
         </h2>
         <p className="body-sm">
-          The report shows the size of the files removed and the free space before and after.
-          These can differ because:
+          The report shows the size of the files removed and the free space before and after. These
+          can differ because:
         </p>
         <ul className="bullets body-sm">
           <li>
-            Local snapshots keep removed files until the snapshot goes: Time Machine on macOS,
-            Btrfs or ZFS snapshots on Linux, restore points on Windows.
+            Local snapshots keep removed files until the snapshot goes: Time Machine on macOS, Btrfs
+            or ZFS snapshots on Linux, restore points on Windows.
           </li>
           <li>macOS counts some space as purgeable and frees it later, when space is needed.</li>
           <li>The system can free space a little after the files are removed.</li>
           <li>
-            Docker Desktop keeps its data in one disk file, which does not shrink when files
-            inside it are removed.
+            Docker Desktop keeps its data in one disk file, which does not shrink when files inside
+            it are removed.
           </li>
           <li>Other apps can write files while the cleanup runs.</li>
         </ul>
@@ -88,8 +88,8 @@ export function Help({ info }: Props) {
         </p>
         {info && <p className="code path">{info.audit_log_path}</p>}
         <p className="body-sm">
-          You can delete the log yourself. Space Optimiser does not upload a list of your files,
-          and Export report saves the report only to a file on this computer.
+          You can delete the log yourself. Space Optimiser does not upload a list of your files, and
+          Export report saves the report only to a file on this computer.
         </p>
       </section>
 
@@ -98,8 +98,8 @@ export function Help({ info }: Props) {
           Administrator access
         </h2>
         <p className="body-sm">
-          Space Optimiser never runs as administrator or root and never asks for your password.
-          If it is started that way, it stops and says so.
+          Space Optimiser never runs as administrator or root and never asks for your password. If
+          it is started that way, it stops and says so.
         </p>
       </section>
     </section>
