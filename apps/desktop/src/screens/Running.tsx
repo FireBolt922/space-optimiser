@@ -8,7 +8,7 @@ interface Props {
 export function Running({ done, total, stopping, onStop }: Props) {
   return (
     <section className="screen" aria-labelledby="running-title">
-      <h1 id="running-title" className="title-xl">
+      <h1 id="running-title" className="title-xl" tabIndex={-1}>
         Cleaning
       </h1>
       <p className="body" role="status">

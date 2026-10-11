@@ -188,11 +188,11 @@ fn engine_errors_reach_the_ui_as_a_kind_and_a_message() {
 }
 
 #[test]
-fn reveal_is_not_in_this_build() {
+fn reveal_before_a_scan_is_an_unknown_candidate() {
     let home = common::basic_home();
     let engine = home.engine();
     assert_eq!(
         engine.reveal(parse::<RevealArgs>(r#"{"candidate_id":1}"#)),
-        Err(EngineError::Unsupported)
+        Err(EngineError::UnknownCandidate)
     );
 }

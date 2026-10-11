@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Space Optimiser",
-        "width": 960,
-        "height": 680,
-        "minWidth": 640,
-        "minHeight": 480,
+        "width": 1080,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 560,
         "backgroundColor": "#061a35"
       }
     ],
@@ -28,7 +28,18 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "nsis",
+      "msi"
+    ],
+    "category": "Utility",
+    "shortDescription": "Frees disk space by clearing caches and old temporary files.",
+    "longDescription": "Space Optimiser scans a fixed list of caches and temporary folders, shows what each cleanup does, and removes only what you confirm. It does not upload a list of your files and does not run as administrator.",
+    "copyright": "Space Optimiser",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,8 +47,26 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../src/assets/fonts/OFL.txt": "licences/Inter-OFL-1.1.txt"
+    },
     "macOS": {
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "hardenedRuntime": true,
+      "signingIdentity": null
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
+      }
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
     }
   }
 }

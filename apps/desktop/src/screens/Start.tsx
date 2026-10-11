@@ -11,12 +11,12 @@ interface Props {
 export function Start({ notice, interrupted, onDismissInterrupted, onScan }: Props) {
   return (
     <section className="screen" aria-labelledby="start-title">
-      <h1 id="start-title" className="title-xl">
+      <h1 id="start-title" className="title-xl" tabIndex={-1}>
         Free up space safely
       </h1>
       <p className="body ink-muted">
         Space Optimiser only removes files in locations it has a reviewed rule for, and only
-        after you confirm. This version checks your temporary files.
+        after you confirm.
       </p>
 
       {interrupted && (
@@ -61,8 +61,8 @@ export function Start({ notice, interrupted, onDismissInterrupted, onScan }: Pro
         <div className="card mode">
           <h2 className="title">Deep Scan</h2>
           <p className="body-sm ink-muted">
-            For developers. Adds package and build caches in a later version; for now it checks
-            temporary files.
+            For developers. Everything in Normal Scan, plus package caches, old logs, Docker&apos;s
+            build cache, and a list of large files.
           </p>
           <button type="button" className="button button-primary" onClick={() => onScan("deep")}>
             Deep Scan
@@ -71,7 +71,7 @@ export function Start({ notice, interrupted, onDismissInterrupted, onScan }: Pro
         <div className="card mode">
           <h2 className="title">Normal Scan</h2>
           <p className="body-sm ink-muted">
-            For everyone. Checks temporary files that are more than a day old.
+            For everyone. Checks temporary files, thumbnails, font caches, and browser caches.
           </p>
           <button type="button" className="button" onClick={() => onScan("normal")}>
             Normal Scan

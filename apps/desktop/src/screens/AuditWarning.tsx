@@ -8,7 +8,7 @@ interface Props {
 export function AuditWarning({ diskFull, onBack, onContinue }: Props) {
   return (
     <section className="screen" aria-labelledby="audit-title">
-      <h1 id="audit-title" className="title-xl">
+      <h1 id="audit-title" className="title-xl" tabIndex={-1}>
         No log file
       </h1>
       <p className="body" role="alert">

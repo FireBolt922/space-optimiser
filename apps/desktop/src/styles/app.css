@@ -47,23 +47,38 @@ p {
   }
 }
 
+/* Layout (M6): a fixed sidebar and one content column. Below 1000px wide the
+   sidebar becomes a top bar, so the 800px minimum window never scrolls
+   sideways. */
 .app {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
   min-height: 100%;
 }
 
-.app-header {
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-4);
+  background: var(--surface-subtle);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-8);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-subtle);
+  padding: 0 var(--space-2);
 }
 
 .app-icon {
   display: block;
+  flex: none;
   width: 32px;
   height: 32px;
   border-radius: var(--radius-md);
@@ -77,11 +92,91 @@ p {
   letter-spacing: -0.01em;
 }
 
+.nav-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control-md);
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--surface-raised);
+}
+
+.nav-item[aria-current="page"] {
+  background: var(--primary-subtle);
+  color: var(--on-primary-subtle);
+}
+
+.sidebar-version {
+  margin-top: auto;
+  padding: 0 var(--space-2);
+}
+
+.icon {
+  display: block;
+  flex: none;
+}
+
 .app-main {
-  flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
   padding: var(--space-8);
+  background: var(--surface);
+}
+
+@media (max-width: 999px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-8);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand {
+    padding: 0;
+  }
+
+  .nav-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  /* About shows the version; the top bar keeps to one line. */
+  .sidebar-version {
+    display: none;
+  }
 }
 
 .card {
@@ -92,7 +187,6 @@ p {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xs);
 }
-
 
 .ink-muted {
   color: var(--ink-muted);
@@ -172,7 +266,7 @@ p {
 
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) 0;
@@ -184,11 +278,15 @@ p {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  min-height: var(--control-sm);
 }
 
-.row-name input {
-  width: 18px;
-  height: 18px;
+/* Checkboxes and radios: at least a 24px target (WCAG 2.2 target size). */
+.row-name input,
+.choice input {
+  width: 24px;
+  height: 24px;
+  margin: 0;
   accent-color: var(--primary);
   flex: none;
 }
@@ -196,6 +294,17 @@ p {
 .row-size {
   min-width: 72px;
   text-align: right;
+}
+
+/* A second line under the row name: where a tool row's folder came from. */
+.row-detail {
+  grid-column: 1 / -1;
+  padding-left: calc(24px + var(--space-2));
+  overflow-wrap: anywhere;
+}
+
+.row-error {
+  color: var(--danger);
 }
 
 /* File names are attacker-controlled text: never let them break the layout. */
@@ -231,7 +340,21 @@ p {
   margin-top: var(--space-2);
 }
 
+.actions-start {
+  justify-content: flex-start;
+}
+
+/* Status text on the left of a button row; empty until there is news. */
+.action-status {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   min-height: var(--control-md);
   padding: 0 var(--space-4);
   border: 1px solid var(--border-strong);
@@ -259,6 +382,24 @@ p {
   background: var(--primary-hover);
 }
 
+.button-primary:active:not(:disabled) {
+  border-color: var(--primary-pressed);
+  background: var(--primary-pressed);
+}
+
+/* Small secondary buttons inside rows: still a 32px target. */
+.button-sm {
+  min-height: var(--control-sm);
+  padding: 0 var(--space-3);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.button-sm .icon {
+  width: 16px;
+  height: 16px;
+}
+
 .button:disabled {
   color: var(--ink-disabled);
   border-color: var(--border);
@@ -282,7 +423,9 @@ p {
 }
 
 .skipped summary,
-details.card summary {
+details.card summary,
+.summary {
+  min-height: 24px;
   cursor: pointer;
 }
 
@@ -304,4 +447,57 @@ details.card summary {
 
 .link:hover {
   color: var(--link-hover);
+}
+
+/* Settings, Help, About (M6). */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.choice-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  min-width: 0;
+}
+
+.choice-group legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  margin-bottom: var(--space-2);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-md);
+  cursor: pointer;
+}
+
+/* A path shown for reading or copying; long paths wrap instead of scrolling. */
+.path {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.bullets {
+  margin: 0;
+  padding-left: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.free-space {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }

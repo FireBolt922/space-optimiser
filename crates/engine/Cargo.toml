@@ -19,13 +19,21 @@ rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
+    # Handle-relative delete (phase 8 item 3): `NtCreateFile` with a parent
+    # directory handle, `OBJECT_ATTRIBUTES`, and `IO_STATUS_BLOCK`.
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
-    # Running-browser detection by process name (phase 5 item 5).
+    # Running-browser detection by process name (phase 5 item 5), and
+    # resuming a tool started suspended (phase 6 item 1).
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    # A tool and everything it starts die together on timeout (phase 6).
+    "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }

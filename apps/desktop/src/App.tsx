@@ -1,11 +1,11 @@
-// Milestone M3: scan, review, confirm, run, and report for `user-temp`.
+// Scan, review, confirm, run, and report, plus Settings, Help, and About.
 // The UI holds ids only. It never builds a path, and file names are always
 // rendered as text; dangerouslySetInnerHTML is banned by the lint config.
-import { useCallback, useEffect, useState } from "react";
-import appIcon from "../src-tauri/icons/source/space-optimiser-app-icon.svg";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   errorMessage,
   isEngineError,
+  type AppInfo,
   type Engine,
   type InterruptedRun,
   type Plan,
@@ -20,6 +20,11 @@ import { Review } from "./screens/Review";
 import { AuditWarning } from "./screens/AuditWarning";
 import { Running } from "./screens/Running";
 import { ReportScreen } from "./screens/ReportScreen";
+import { Settings } from "./screens/Settings";
+import { Help } from "./screens/Help";
+import { About } from "./screens/About";
+import { Sidebar, type View } from "./components/Sidebar";
+import { useTheme } from "./theme";
 
 const POLL_MS = 200;
 
@@ -43,10 +48,25 @@ type Screen =
 export default function App({ engine }: { engine: Engine }) {
   const [screen, setScreen] = useState<Screen>({ kind: "start" });
   const [interrupted, setInterrupted] = useState<InterruptedRun | null>(null);
+  // The view is separate from the clean-up screen, so a scan or a run keeps
+  // polling while Settings, Help, or About is open.
+  const [view, setView] = useState<View>("cleanup");
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [theme, setTheme] = useTheme();
+  const main = useRef<HTMLElement>(null);
+  const shownView = useRef(view);
 
   useEffect(() => {
     engine.interruptedRun().then(setInterrupted, () => setInterrupted(null));
+    engine.appInfo().then(setInfo, () => setInfo(null));
   }, [engine]);
+
+  // A view change moves focus to that view's heading.
+  useEffect(() => {
+    if (shownView.current === view) return;
+    shownView.current = view;
+    main.current?.querySelector<HTMLElement>("h1")?.focus();
+  }, [view]);
 
   const startScan = useCallback(
     async (mode: ScanMode) => {
@@ -198,62 +218,74 @@ export default function App({ engine }: { engine: Engine }) {
   const backToResults = (scan: ScanView, selected: number[]) =>
     setScreen({ kind: "results", scan, selected });
 
+  const cleanupScreen = (
+    <>
+      {screen.kind === "start" && (
+        <Start
+          notice={screen.notice}
+          interrupted={interrupted}
+          onDismissInterrupted={() => setInterrupted(null)}
+          onScan={startScan}
+        />
+      )}
+      {screen.kind === "scanning" && (
+        <Scanning view={screen.view} cancelling={screen.cancelling} onCancel={cancelScan} />
+      )}
+      {screen.kind === "results" && (
+        <Results
+          scan={screen.scan}
+          selected={screen.selected}
+          onSelect={(selected) => setScreen({ ...screen, selected })}
+          onReview={() => review(screen.scan, screen.selected)}
+          onScanAgain={() => setScreen({ kind: "start" })}
+          onReveal={(id) => engine.reveal(id)}
+        />
+      )}
+      {screen.kind === "review" && (
+        <Review
+          plan={screen.plan}
+          expired={screen.expired}
+          busy={screen.busy}
+          error={screen.error}
+          onBack={() => backToResults(screen.scan, screen.selected)}
+          onConfirm={confirm}
+          onScanAgain={() => setScreen({ kind: "start" })}
+        />
+      )}
+      {screen.kind === "audit" && (
+        <AuditWarning
+          diskFull={screen.diskFull}
+          onBack={() => backToResults(screen.scan, screen.selected)}
+          onContinue={confirmWithoutLog}
+        />
+      )}
+      {screen.kind === "running" && (
+        <Running
+          done={screen.done}
+          total={screen.total}
+          stopping={screen.stopping}
+          onStop={stop}
+        />
+      )}
+      {screen.kind === "report" && (
+        <ReportScreen
+          report={screen.report}
+          platform={info?.platform ?? null}
+          onExport={(planId) => engine.exportReport(planId)}
+          onDone={() => setScreen({ kind: "start" })}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className="app">
-      <header className="app-header">
-        <img className="app-icon" src={appIcon} alt="" width={32} height={32} />
-        <span className="product-name">Space Optimiser</span>
-      </header>
-      <main className="app-main">
-        {screen.kind === "start" && (
-          <Start
-            notice={screen.notice}
-            interrupted={interrupted}
-            onDismissInterrupted={() => setInterrupted(null)}
-            onScan={startScan}
-          />
-        )}
-        {screen.kind === "scanning" && (
-          <Scanning view={screen.view} cancelling={screen.cancelling} onCancel={cancelScan} />
-        )}
-        {screen.kind === "results" && (
-          <Results
-            scan={screen.scan}
-            selected={screen.selected}
-            onSelect={(selected) => setScreen({ ...screen, selected })}
-            onReview={() => review(screen.scan, screen.selected)}
-            onScanAgain={() => setScreen({ kind: "start" })}
-          />
-        )}
-        {screen.kind === "review" && (
-          <Review
-            plan={screen.plan}
-            expired={screen.expired}
-            busy={screen.busy}
-            error={screen.error}
-            onBack={() => backToResults(screen.scan, screen.selected)}
-            onConfirm={confirm}
-            onScanAgain={() => setScreen({ kind: "start" })}
-          />
-        )}
-        {screen.kind === "audit" && (
-          <AuditWarning
-            diskFull={screen.diskFull}
-            onBack={() => backToResults(screen.scan, screen.selected)}
-            onContinue={confirmWithoutLog}
-          />
-        )}
-        {screen.kind === "running" && (
-          <Running
-            done={screen.done}
-            total={screen.total}
-            stopping={screen.stopping}
-            onStop={stop}
-          />
-        )}
-        {screen.kind === "report" && (
-          <ReportScreen report={screen.report} onDone={() => setScreen({ kind: "start" })} />
-        )}
+      <Sidebar view={view} version={info?.version ?? null} onNavigate={setView} />
+      <main className="app-main" ref={main}>
+        {view === "cleanup" && cleanupScreen}
+        {view === "settings" && <Settings theme={theme} onTheme={setTheme} />}
+        {view === "help" && <Help info={info} />}
+        {view === "about" && <About info={info} onHelp={() => setView("help")} />}
       </main>
     </div>
   );

@@ -1,24 +1,28 @@
 //! The engine as the desktop shell sees it: one scan, its plans, and at most
 //! one running plan. Commands take ids and return views; paths stay here.
 //! Scans and runs happen on worker threads; the UI polls `get_scan` and
-//! `get_run`, so the webview needs no event permission.
+//! `get_run`, so the webview needs no event permission. "Show in folder",
+//! the report export, and the About data also take ids, never paths.
 
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::audit::{self, Audit};
 use crate::clock::{Clock, PLAN_LIFETIME, Stamp, SystemClock};
-use crate::discover::{self, CancelToken, NormalScan, Progress, RootOutcome, ScanError};
+use crate::dedup;
+use crate::discover::{self, CancelToken, Progress, RootOutcome, Scan, ScanError};
 use crate::execute::{self, Measure, PlanEntry};
 use crate::model::{
-    Action, BuildPlanArgs, Candidate, ConfirmationToken, ExecutePlanArgs, ExecuteStart,
-    InterruptedRun, Plan, PlanId, PlanItem, PlanRef, Report, RevealArgs, RootView, RunStatus,
-    RunView, ScanId, ScanRef, ScanStatus, ScanView, SkippedView, StartScanArgs,
+    Action, AppInfo, BuildPlanArgs, Candidate, ConfirmationToken, ExecutePlanArgs, ExecuteStart,
+    ExportedReport, InterruptedRun, Plan, PlanId, PlanItem, PlanRef, Platform, Report, RevealArgs,
+    RootView, RunStatus, RunView, ScanId, ScanMode, ScanRef, ScanStatus, ScanView, SkippedView,
+    StartScanArgs,
 };
-use crate::policy::{CatalogId, Context};
+use crate::platform::RevealCommand;
+use crate::policy::{CatalogId, Context, VisitLog};
 use crate::{EngineError, Result};
 
 /// How long after the last delete the "after" free-space reading waits.
@@ -27,6 +31,8 @@ const SETTLE: Duration = Duration::from_secs(3);
 type ContextFn = dyn Fn() -> io::Result<Context> + Send + Sync;
 type FreeSpaceFn = dyn Fn(&Path) -> io::Result<u64> + Send + Sync;
 type AfterItemFn = dyn Fn(usize, &CancelToken) + Send + Sync;
+type RevealFn = dyn Fn(&RevealCommand) -> io::Result<()> + Send + Sync;
+type VisitedRootsFn = dyn Fn(ScanMode, &[PathBuf]) + Send + Sync;
 
 /// Where the engine gets its context, clock, and measurements. Production
 /// uses [`Engine::for_this_machine`]; tests point it at a fixture home.
@@ -37,11 +43,15 @@ pub struct Config {
     free_space: Box<FreeSpaceFn>,
     settle: Duration,
     after_item: Option<Box<AfterItemFn>>,
+    export_dir: Option<PathBuf>,
+    reveal: Option<Box<RevealFn>>,
+    visited_roots: Option<Box<VisitedRootsFn>>,
 }
 
 impl Config {
     /// `context` is resolved again for every scan and every run, so the
-    /// executor re-checks against the folders as they are now.
+    /// executor re-checks against the folders as they are now. Tools run in
+    /// an empty `work` folder next to `audit_dir`.
     pub fn new(
         context: impl Fn() -> io::Result<Context> + Send + Sync + 'static,
         audit_dir: PathBuf,
@@ -53,6 +63,9 @@ impl Config {
             free_space: Box::new(crate::measure::free_space),
             settle: SETTLE,
             after_item: None,
+            export_dir: None,
+            reveal: None,
+            visited_roots: None,
         }
     }
 
@@ -85,6 +98,35 @@ impl Config {
         hook: impl Fn(usize, &CancelToken) + Send + Sync + 'static,
     ) -> Self {
         self.after_item = Some(Box::new(hook));
+        self
+    }
+
+    /// Saves exported reports here instead of Downloads. The folder must
+    /// exist.
+    #[doc(hidden)]
+    pub fn with_export_dir(mut self, dir: PathBuf) -> Self {
+        self.export_dir = Some(dir);
+        self
+    }
+
+    /// Runs this instead of the OS file manager.
+    #[doc(hidden)]
+    pub fn with_reveal(
+        mut self,
+        hook: impl Fn(&RevealCommand) -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.reveal = Some(Box::new(hook));
+        self
+    }
+
+    /// Called after each scan with the outermost folders it read (phase 11:
+    /// the debug log of scanned roots).
+    #[doc(hidden)]
+    pub fn with_visited_roots(
+        mut self,
+        hook: impl Fn(ScanMode, &[PathBuf]) + Send + Sync + 'static,
+    ) -> Self {
+        self.visited_roots = Some(Box::new(hook));
         self
     }
 }
@@ -150,8 +192,7 @@ impl Engine {
     /// Starts a scan on a worker thread. A new scan cancels the previous
     /// one and discards its plans.
     pub fn start_scan(&self, args: StartScanArgs) -> Result<ScanId> {
-        // Both modes run the Normal Scan rows until M5 adds the Deep rows.
-        let _ = args.mode;
+        let mode = args.mode;
         let mut state = self.state();
         if state.running.is_some() {
             return Err(EngineError::RunInProgress);
@@ -177,11 +218,12 @@ impl Engine {
                 candidates: Vec::new(),
                 skipped: Vec::new(),
                 roots: Vec::new(),
+                notes: Vec::new(),
             },
         });
         drop(state);
         let engine = self.clone();
-        std::thread::spawn(move || engine.run_scan(scan_id, &cancel));
+        std::thread::spawn(move || engine.run_scan(scan_id, mode, &cancel));
         Ok(scan_id)
     }
 
@@ -213,8 +255,9 @@ impl Engine {
         }
     }
 
-    /// Freezes the selected candidates into a plan. Only candidates whose
-    /// action is a delete can be planned.
+    /// Freezes the selected candidates into a plan. Only deletes and tool
+    /// commands can be planned. A selected candidate that another selected
+    /// delete covers is left out, so nothing counts twice.
     pub fn build_plan(&self, args: BuildPlanArgs) -> Result<Plan> {
         let mut state = self.state();
         let view = &scan_slot(&state, args.scan_id)?.view;
@@ -235,11 +278,11 @@ impl Engine {
                 .find(|c| c.id == *id)
                 .ok_or(EngineError::UnknownCandidate)?;
             match candidate.action {
-                Action::Delete => chosen.push(candidate),
-                Action::RunTool => return Err(EngineError::Unsupported),
+                Action::Delete | Action::RunTool => chosen.push(candidate),
                 Action::Report | Action::None => return Err(EngineError::NotActionable),
             }
         }
+        let chosen = dedup::uncovered(&chosen);
         let entries: Vec<PlanEntry> = chosen
             .iter()
             .map(|c| PlanEntry::from_candidate(c).ok_or(EngineError::NotActionable))
@@ -252,10 +295,12 @@ impl Engine {
                 display_name: c.display_name.clone(),
                 action_text: c.catalog_id.action_text(),
                 estimated_bytes: c.estimated_bytes,
+                upper_bound_bytes: c.upper_bound_bytes,
                 file_count: c.file_count,
             })
             .collect();
         let estimated_bytes = chosen.iter().map(|c| c.estimated_bytes).sum();
+        let tool_upper_bound_bytes = chosen.iter().filter_map(|c| c.upper_bound_bytes).sum();
         let scan_id = view.scan_id;
         state.next_id += 1;
         let plan_id = PlanId::new(state.next_id);
@@ -265,6 +310,7 @@ impl Engine {
             scan_id,
             items,
             estimated_bytes,
+            tool_upper_bound_bytes,
             expires_in_secs: PLAN_LIFETIME.as_secs(),
         };
         let token = execute::token(plan_id, scan_id, &entries, built);
@@ -290,7 +336,7 @@ impl Engine {
     /// Starts a confirmed plan on a worker thread. Nothing runs when the
     /// token is wrong, the plan expired, or the audit log cannot be started.
     pub fn execute_plan(&self, args: ExecutePlanArgs) -> Result<ExecuteStart> {
-        if cfg!(windows) {
+        if !execute::SUPPORTED {
             return Err(EngineError::Unsupported);
         }
         let mut state = self.state();
@@ -308,10 +354,16 @@ impl Engine {
         let record = self.fresh_plan(&mut state, args.plan_id)?;
         let total = record.entries.len();
         let config = &self.0.config;
-        let ctx = (config.context)().map_err(|e| EngineError::Context(e.to_string()))?;
+        let ctx = self
+            .context()
+            .map_err(|e| EngineError::Context(e.to_string()))?;
         #[cfg(unix)]
         if crate::guard::should_refuse(ctx.euid()) {
             return Err(EngineError::RunningAsRoot);
+        }
+        #[cfg(windows)]
+        if crate::guard::should_refuse_elevated(ctx.elevated()) {
+            return Err(EngineError::RunningElevated);
         }
         let audit = match Audit::start(&config.audit_dir, total, args.keep_log_in_memory) {
             Ok(audit) => audit,
@@ -392,9 +444,114 @@ impl Engine {
         }
     }
 
-    /// Shows a scanned candidate in the OS file manager. Not a delete.
+    /// Shows a candidate of the finished scan in the OS file manager
+    /// (phase 9 item 1). The path comes from the scan and must still name
+    /// the entry the scan saw. Allowed while a plan runs; never deletes.
     pub fn reveal(&self, args: RevealArgs) -> Result<()> {
-        crate::platform::reveal(args.candidate_id)
+        let (path, file_id, revealable) = {
+            let state = self.state();
+            let candidate = state
+                .scan
+                .as_ref()
+                .filter(|s| s.view.status == ScanStatus::Finished)
+                .and_then(|s| s.view.candidates.iter().find(|c| c.id == args.candidate_id))
+                .ok_or(EngineError::UnknownCandidate)?;
+            (
+                candidate.path.clone(),
+                candidate.file_id,
+                candidate.revealable,
+            )
+        };
+        if !revealable {
+            return Err(EngineError::NotActionable);
+        }
+        if crate::measure::file_id(&path).ok() != Some(file_id) {
+            return Err(EngineError::CandidateGone);
+        }
+        let command = crate::platform::reveal_command(&path).ok_or(EngineError::RevealFailed)?;
+        let shown = match &self.0.config.reveal {
+            Some(hook) => hook(&command).is_ok(),
+            None => match crate::tool::reveal(&command) {
+                // Explorer exits with 1 even when it opened the window.
+                Ok(Some(status)) => status.success() || cfg!(windows),
+                Ok(None) => true,
+                Err(_) => false,
+            },
+        };
+        if shown {
+            Ok(())
+        } else {
+            Err(EngineError::RevealFailed)
+        }
+    }
+
+    /// Saves a finished run's report as a text file and says where.
+    pub fn export_report(&self, args: PlanRef) -> Result<ExportedReport> {
+        let report = self
+            .state()
+            .runs
+            .get(&args.plan_id)
+            .ok_or(EngineError::UnknownPlan)?
+            .report
+            .clone()
+            .ok_or(EngineError::RunNotFinished)?;
+        let (dir, is_fallback) = self.export_folder();
+        let failed = |e: io::Error| EngineError::ExportFailed(e.to_string());
+        if is_fallback {
+            std::fs::create_dir_all(&dir).map_err(failed)?;
+        }
+        let now = SystemTime::now();
+        let path =
+            crate::export::save(&dir, now, &crate::export::render(&report, now)).map_err(failed)?;
+        Ok(ExportedReport {
+            path: path.to_string_lossy().into_owned(),
+            file_name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        })
+    }
+
+    /// The version, the audit log's path, and where reports are saved.
+    pub fn app_info(&self) -> AppInfo {
+        AppInfo {
+            version: env!("CARGO_PKG_VERSION"),
+            platform: Platform::CURRENT,
+            audit_log_path: self
+                .0
+                .config
+                .audit_dir
+                .join(audit::FILE)
+                .to_string_lossy()
+                .into_owned(),
+            export_folder: self.export_folder().0.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// The configured export folder, else Downloads, else `exports` next
+    /// to the audit folder. True for that last one, which may be created.
+    fn export_folder(&self) -> (PathBuf, bool) {
+        let config = &self.0.config;
+        if let Some(dir) = &config.export_dir {
+            return (dir.clone(), false);
+        }
+        match (config.context)()
+            .ok()
+            .and_then(|ctx| crate::platform::downloads_dir(&ctx))
+        {
+            Some(dir) => (dir, false),
+            None => (config.audit_dir.with_file_name("exports"), true),
+        }
+    }
+
+    /// The context for a scan or a run, with the tools' work folder.
+    fn context(&self) -> io::Result<Context> {
+        let config = &self.0.config;
+        let ctx = (config.context)()?;
+        if ctx.has_work_dir() {
+            return Ok(ctx);
+        }
+        Ok(ctx.with_work_dir(config.audit_dir.with_file_name("work")))
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -414,20 +571,31 @@ impl Engine {
         Ok(&state.plans[&plan_id])
     }
 
-    fn run_scan(&self, scan_id: ScanId, cancel: &CancelToken) {
+    fn run_scan(&self, scan_id: ScanId, mode: ScanMode, cancel: &CancelToken) {
         let started = Instant::now();
-        let result = (self.0.config.context)()
+        let hook = self.0.config.visited_roots.as_deref();
+        let visits: Option<VisitLog> = hook.map(|_| VisitLog::default());
+        let result = self
+            .context()
+            .map(|ctx| match &visits {
+                Some(log) => ctx.with_visit_log(log.clone()),
+                None => ctx,
+            })
             .map_err(|e| EngineError::Context(e.to_string()).to_string())
             .and_then(|ctx| {
-                discover::scan_normal(&ctx, cancel, |progress| {
+                discover::scan(&ctx, mode, cancel, |progress| {
                     self.update_scan(scan_id, |view| view.progress = progress);
                 })
                 .map_err(|e| match e {
                     ScanError::Cancelled => String::new(),
-                    ScanError::RunningAsRoot => e.to_string(),
+                    ScanError::RunningAsRoot | ScanError::RunningElevated => e.to_string(),
                 })
             });
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let (Some(hook), Some(log)) = (hook, visits) {
+            let visited = std::mem::take(&mut *log.lock().unwrap_or_else(PoisonError::into_inner));
+            hook(mode, &outermost(visited));
+        }
         self.update_scan(scan_id, |view| match result {
             Ok(scan) => {
                 view.duration_ms = duration_ms;
@@ -490,6 +658,20 @@ impl Engine {
     }
 }
 
+/// The paths in `visited` that have no visited ancestor, sorted.
+fn outermost(mut visited: Vec<PathBuf>) -> Vec<PathBuf> {
+    // Component order puts each path right before everything inside it.
+    visited.sort();
+    visited.dedup();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for path in visited {
+        if roots.last().is_none_or(|root| !path.starts_with(root)) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
 fn scan_slot(state: &State, scan_id: ScanId) -> Result<&ScanSlot> {
     state
         .scan
@@ -498,7 +680,7 @@ fn scan_slot(state: &State, scan_id: ScanId) -> Result<&ScanSlot> {
         .ok_or(EngineError::UnknownScan)
 }
 
-fn fill(view: &mut ScanView, scan: NormalScan) {
+fn fill(view: &mut ScanView, scan: Scan) {
     view.progress = scan.progress;
     let label = CatalogId::UserTemp.location_label();
     for root in scan.temp {
@@ -536,4 +718,6 @@ fn fill(view: &mut ScanView, scan: NormalScan) {
             display_name: s.display_name,
             reason: s.reason,
         }));
+    view.notes = scan.notes;
+    dedup::link_covers(&mut view.candidates);
 }

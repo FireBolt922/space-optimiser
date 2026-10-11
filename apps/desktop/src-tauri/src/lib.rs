@@ -1,17 +1,20 @@
 //! Thin Tauri shell. Each command takes one typed payload and forwards it to
 //! the engine. No command accepts a path, and this crate holds no file logic
 //! (phase 3). Scans and runs happen on engine threads; the window polls
-//! `get_scan` and `get_run`.
+//! `get_scan` and `get_run`. Commands that start a process or write a file
+//! (`reveal`, `export_report`) run off the main thread.
 
 use std::path::PathBuf;
 
 use space_optimiser_engine::{
-    Engine, EngineError,
+    Config, Engine, EngineError,
     guard::{self, GuardError, InstanceLock},
     model::{
-        BuildPlanArgs, ConfirmationToken, ExecutePlanArgs, ExecuteStart, InterruptedRun, Plan,
-        PlanRef, RevealArgs, RunView, ScanId, ScanRef, ScanView, StartScanArgs,
+        AppInfo, BuildPlanArgs, ConfirmationToken, ExecutePlanArgs, ExecuteStart, ExportedReport,
+        InterruptedRun, Plan, PlanRef, RevealArgs, RunView, ScanId, ScanRef, ScanView,
+        StartScanArgs,
     },
+    platform,
 };
 use tauri::{Manager, State};
 
@@ -62,9 +65,21 @@ fn interrupted_run(engine: State<'_, Engine>) -> Option<InterruptedRun> {
     engine.interrupted_run()
 }
 
-#[tauri::command]
+/// Waits up to a few seconds for the file manager, so it runs off the main
+/// thread.
+#[tauri::command(async)]
 fn reveal(engine: State<'_, Engine>, args: RevealArgs) -> CommandResult<()> {
     engine.reveal(args)
+}
+
+#[tauri::command(async)]
+fn export_report(engine: State<'_, Engine>, args: PlanRef) -> CommandResult<ExportedReport> {
+    engine.export_report(args)
+}
+
+#[tauri::command]
+fn app_info(engine: State<'_, Engine>) -> AppInfo {
+    engine.app_info()
 }
 
 /// This computer's folders. Debug builds can point the engine at a copy of
@@ -73,25 +88,66 @@ fn reveal(engine: State<'_, Engine>, args: RevealArgs) -> CommandResult<()> {
 fn engine(audit_dir: PathBuf) -> Engine {
     #[cfg(debug_assertions)]
     if let Some(home) = std::env::var_os("SPACE_OPTIMISER_FIXTURE_HOME") {
-        return fixture_engine(PathBuf::from(home));
+        return Engine::new(debug_roots(fixture_config(PathBuf::from(home))));
     }
-    Engine::for_this_machine(audit_dir)
+    let config = Config::new(platform::resolve_context, audit_dir);
+    #[cfg(debug_assertions)]
+    let config = debug_roots(config);
+    Engine::new(config)
+}
+
+/// With `SPACE_OPTIMISER_DEBUG_ROOTS=1`, a debug build prints the
+/// outermost folders each scan read (phase 11).
+#[cfg(debug_assertions)]
+fn debug_roots(config: Config) -> Config {
+    use space_optimiser_engine::model::ScanMode;
+
+    if std::env::var_os("SPACE_OPTIMISER_DEBUG_ROOTS").is_none_or(|v| v != "1") {
+        return config;
+    }
+    config.with_visited_roots(|mode, roots| {
+        let mode = match mode {
+            ScanMode::Normal => "normal",
+            ScanMode::Deep => "deep",
+        };
+        for root in roots {
+            eprintln!(
+                "space-optimiser debug: {mode} scan visited {}",
+                root.display()
+            );
+        }
+    })
 }
 
 /// The fixture clock runs two days ahead, so files the script just copied
 /// count as old and a file it dated two days ahead counts as new. Running
 /// browsers are read from this computer, so an open browser shows its
-/// fixture cache as "quit first". The audit log goes next to the fixture
-/// home, not into the real app data.
+/// fixture cache as "quit first". No tools are found, so nothing runs
+/// against this computer's npm, pip, or Docker: tool rows show only their
+/// fixture default folders, as "not sure". The audit log and exported
+/// reports go next to the fixture home, not into the real app data or
+/// Downloads. A folder without the fixture marker is refused, so this mode
+/// cannot be pointed at a real home.
 #[cfg(debug_assertions)]
-fn fixture_engine(home: PathBuf) -> Engine {
-    use space_optimiser_engine::Config;
+fn fixture_config(home: PathBuf) -> Config {
     use space_optimiser_engine::policy::{Context, OwnerRule};
     use std::time::{Duration, SystemTime};
 
+    if !guard::is_fixture_home(&home) {
+        eprintln!(
+            "{} is not a fixture home copy (no .space-optimiser-fixture file). \
+             Make one with scripts/fixture-home.sh.",
+            home.display()
+        );
+        std::process::exit(1);
+    }
     eprintln!("Fixture mode: scanning {}", home.display());
     let audit_dir = home.with_file_name("audit");
-    Engine::new(Config::new(
+    let export_dir = home.with_file_name("exports");
+    if let Err(e) = std::fs::create_dir_all(&export_dir) {
+        eprintln!("Could not create {}: {e}", export_dir.display());
+    }
+    Config::new(
         move || {
             Ok(Context::for_fixture(&home)
                 .with_now(SystemTime::now() + Duration::from_secs(2 * 24 * 60 * 60))
@@ -99,7 +155,8 @@ fn fixture_engine(home: PathBuf) -> Engine {
                 .with_system_processes())
         },
         audit_dir,
-    ))
+    )
+    .with_export_dir(export_dir)
 }
 
 pub fn run() {
@@ -134,7 +191,9 @@ pub fn run() {
             get_run,
             stop_run,
             interrupted_run,
-            reveal
+            reveal,
+            export_report,
+            app_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running Space Optimiser");

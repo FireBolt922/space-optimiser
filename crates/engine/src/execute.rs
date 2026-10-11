@@ -5,27 +5,36 @@
 //! following links and every entry below it is reached through a directory
 //! handle, never through a full path.
 //!
-//! Two shapes of plan entry exist. A `user-temp` entry is one name directly
-//! inside the temp root, removed whole. A cache entry is the cache folder
-//! itself: everything inside it is removed and the folder stays.
+//! Three shapes of plan entry exist. A `user-temp` or `user-logs-old` entry
+//! is one name directly inside its root, removed whole. A cache entry is the
+//! cache folder itself: everything inside it is removed and the folder
+//! stays. A tool entry runs the row's fixed clean command through
+//! [`crate::tool`], after finding the same tool again (phase 8 item 4).
 
 use std::ffi::OsString;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::audit::Audit;
+use crate::audit::{self, Audit};
 use crate::clock::Stamp;
 use crate::discover::CancelToken;
-use crate::measure::FileId;
+use crate::docker;
+use crate::measure::{self, FileId};
 use crate::model::{
     Candidate, CandidateId, ConfirmationToken, FreeSpace, Outcome, PlanId, Platform, Report,
-    ReportItem, ScanId, Scope, SkipCause,
+    ReportItem, ScanId, Scope, SkipCause, ToolAction,
 };
 use crate::policy::{self, CatalogId, Context, ValidRoot};
 use crate::roots;
+use crate::tool::{self, Exit};
+
+/// Whether this build has a handle-relative delete executor for the target
+/// platform. The engine refuses to execute a plan when it is false. Unix
+/// uses `rustix`; Windows uses `NtCreateFile` handles (`execute/win.rs`).
+pub(crate) const SUPPORTED: bool = cfg!(any(unix, windows));
 
 /// One planned entry: what the scan saw, kept in the engine.
 #[derive(Debug, Clone)]
@@ -33,38 +42,88 @@ pub(crate) struct PlanEntry {
     pub candidate_id: CandidateId,
     pub catalog_id: CatalogId,
     pub display_name: String,
-    root: ValidRoot,
-    /// A single path component directly inside `root`, or `None` for the
-    /// contents of `root` itself.
-    name: Option<OsString>,
-    file_id: FileId,
-    /// Read by the Unix executor; the Windows one lands in M7.
-    #[cfg_attr(windows, allow(dead_code))]
-    members: Arc<[FileId]>,
+    work: Work,
+}
+
+#[derive(Debug, Clone)]
+enum Work {
+    Delete {
+        root: ValidRoot,
+        /// A single path component directly inside `root`, or `None` for
+        /// the contents of `root` itself.
+        name: Option<OsString>,
+        file_id: FileId,
+        /// Sorted identities of everything inside, as the scan saw them.
+        members: Arc<[FileId]>,
+    },
+    Tool {
+        action: ToolAction,
+        /// Where free space is measured: the cache folder, or the home.
+        measure_at: PathBuf,
+        /// The cache folder the tool reported at scan time. None for Docker,
+        /// whose cache is inside its own disk.
+        cache: Option<FileId>,
+    },
 }
 
 impl PlanEntry {
     pub fn from_candidate(candidate: &Candidate) -> Option<Self> {
-        let name = match candidate.scope {
-            Scope::Entry => Some(candidate.path.file_name()?.to_owned()),
-            Scope::Contents => None,
+        let work = match candidate.scope {
+            Scope::Entry | Scope::Contents => Work::Delete {
+                root: candidate.root.clone()?,
+                name: match candidate.scope {
+                    Scope::Entry => Some(candidate.path.file_name()?.to_owned()),
+                    _ => None,
+                },
+                file_id: candidate.file_id,
+                members: candidate.members.clone(),
+            },
+            Scope::Tool => Work::Tool {
+                action: candidate.tool.clone()?,
+                cache: candidate.root.as_ref().map(ValidRoot::id),
+                measure_at: candidate
+                    .root
+                    .as_ref()
+                    .map_or_else(|| candidate.path.clone(), |r| r.path().to_path_buf()),
+            },
+            Scope::Report => return None,
         };
         Some(Self {
             candidate_id: candidate.id,
             catalog_id: candidate.catalog_id,
             display_name: candidate.display_name.clone(),
-            root: candidate.root.clone(),
-            name,
-            file_id: candidate.file_id,
-            members: candidate.members.clone(),
+            work,
         })
     }
 
-    /// The full path, for the audit log only.
-    fn path(&self) -> std::path::PathBuf {
-        match &self.name {
-            Some(name) => self.root.path().join(name),
-            None => self.root.path().to_path_buf(),
+    /// The full path, or the tool's command line, for the audit log only.
+    fn target(&self) -> String {
+        match &self.work {
+            Work::Delete {
+                root,
+                name: Some(name),
+                ..
+            } => audit::escaped(&root.path().join(name)),
+            Work::Delete { root, .. } => audit::escaped(root.path()),
+            Work::Tool { action, .. } => {
+                let mut line = audit::escaped(&action.tool.path);
+                for arg in action.args {
+                    line.push(' ');
+                    line.push_str(arg);
+                }
+                line
+            }
+        }
+    }
+
+    /// Where free space is measured for this entry, and its volume.
+    fn volume(&self) -> (&Path, Option<u64>) {
+        match &self.work {
+            Work::Delete { root, .. } => (root.path(), Some(root.id().device())),
+            Work::Tool { measure_at, .. } => (
+                measure_at,
+                measure::file_id(measure_at).ok().map(|id| id.device()),
+            ),
         }
     }
 }
@@ -80,14 +139,18 @@ pub(crate) fn token(
     let mut hasher = DefaultHasher::new();
     (plan, scan, built.awake, built.total).hash(&mut hasher);
     for entry in entries {
-        (
-            entry.catalog_id.as_str(),
-            &entry.name,
-            entry.file_id,
-            entry.root.id(),
-            entry.root.path(),
-        )
-            .hash(&mut hasher);
+        entry.catalog_id.as_str().hash(&mut hasher);
+        match &entry.work {
+            Work::Delete {
+                root,
+                name,
+                file_id,
+                ..
+            } => (name, file_id, root.id(), root.path()).hash(&mut hasher),
+            Work::Tool { action, .. } => {
+                (&action.tool.canonical, action.tool.id, action.args).hash(&mut hasher)
+            }
+        }
     }
     ConfirmationToken::new(format!("{:016x}", hasher.finish()))
 }
@@ -109,17 +172,12 @@ pub(crate) fn run(
     measure: Measure<'_>,
     mut after_item: impl FnMut(usize),
 ) -> Report {
-    let mut volumes: Vec<(u64, &Path, &'static str, Option<u64>)> = Vec::new();
+    let mut volumes: Vec<(Option<u64>, &Path, &'static str, Option<u64>)> = Vec::new();
     for entry in entries {
-        let device = entry.root.id().device();
-        if volumes.iter().all(|v| v.0 != device) {
-            let before = (measure.free_space)(entry.root.path()).ok();
-            volumes.push((
-                device,
-                entry.root.path(),
-                entry.catalog_id.location_label(),
-                before,
-            ));
+        let (path, device) = entry.volume();
+        if volumes.iter().all(|v| device.is_none() || v.0 != device) {
+            let before = (measure.free_space)(path).ok();
+            volumes.push((device, path, entry.catalog_id.location_label(), before));
         }
     }
 
@@ -128,15 +186,19 @@ pub(crate) fn run(
         let done = if stop.is_cancelled() {
             Done::not_run()
         } else {
-            delete_entry(ctx, entry)
+            match &entry.work {
+                Work::Delete { .. } => delete_entry(ctx, entry),
+                Work::Tool { action, cache, .. } => run_tool(ctx, entry.catalog_id, action, *cache),
+            }
         };
         audit.action(
             entry.catalog_id,
-            &entry.path(),
+            &entry.target(),
             done.outcome,
             done.detail.as_deref(),
             done.bytes,
         );
+        let finished = matches!(done.outcome, Outcome::Removed | Outcome::Ran);
         items.push(ReportItem {
             candidate_id: entry.candidate_id,
             catalog_id: entry.catalog_id,
@@ -145,21 +207,20 @@ pub(crate) fn run(
             reason: done.reason,
             detail: done.detail,
             bytes_removed: done.bytes,
-            recovery_text: (done.outcome == Outcome::Removed)
-                .then(|| entry.catalog_id.recovery_text())
-                .flatten(),
+            recovery_text: finished.then(|| entry.catalog_id.recovery_text()).flatten(),
         });
         after_item(index + 1);
     }
 
     let removed = items
         .iter()
-        .filter(|i| i.outcome == Outcome::Removed)
+        .filter(|i| matches!(i.outcome, Outcome::Removed | Outcome::Ran))
         .count();
     let bytes_removed = items.iter().map(|i| i.bytes_removed).sum();
+    let ran_tool = items.iter().any(|i| i.outcome == Outcome::Ran);
     let stopped = items.iter().any(|i| i.outcome == Outcome::NotRun);
     // APFS and other filesystems free space asynchronously.
-    let delay = if bytes_removed > 0 {
+    let delay = if bytes_removed > 0 || ran_tool {
         std::thread::sleep(measure.settle);
         measure.settle
     } else {
@@ -196,8 +257,6 @@ struct Done {
     bytes: u64,
 }
 
-// `removed` and `failed` come from the Unix executor until M7 adds Windows.
-#[cfg_attr(windows, allow(dead_code))]
 impl Done {
     fn removed(bytes: u64) -> Self {
         Self {
@@ -205,6 +264,15 @@ impl Done {
             reason: None,
             detail: None,
             bytes,
+        }
+    }
+
+    fn ran() -> Self {
+        Self {
+            outcome: Outcome::Ran,
+            reason: None,
+            detail: None,
+            bytes: 0,
         }
     }
 
@@ -236,22 +304,87 @@ impl Done {
     }
 }
 
+/// A tool row's clean command, only as the catalog fixes it: the row's own
+/// arguments, the same tool file the scan found, the same cache folder the
+/// tool reported at scan time (asked again now), and for Docker a local
+/// endpoint checked again now.
+fn run_tool(ctx: &Context, row: CatalogId, action: &ToolAction, cache: Option<FileId>) -> Done {
+    let Some((args, stop_on)) = crate::discover::tool_action(row) else {
+        return Done::skipped(SkipCause::NotInThisBuild);
+    };
+    if action.args != args || !tool::refind(ctx, &action.tool) {
+        return Done::skipped(SkipCause::ChangedSinceScan);
+    }
+    if let Some(planned) = cache {
+        let now = crate::discover::tool_cache_root(ctx, row, &action.tool);
+        if now.is_none_or(|root| root.id() != planned) {
+            return Done::skipped(SkipCause::ChangedSinceScan);
+        }
+    }
+    if row == CatalogId::DockerBuildCache && docker::check_local(ctx, &action.tool).is_err() {
+        return Done::skipped(SkipCause::DockerNotLocal);
+    }
+    let timeout = ctx.tools().action_timeout;
+    match tool::run(ctx, &action.tool, args, timeout, stop_on) {
+        Ok(out) => match out.exit {
+            Exit::Success => Done::ran(),
+            Exit::Stopped(_) => Done::skipped(SkipCause::ToolBusy),
+            Exit::TimedOut => Done::failed(
+                format!(
+                    "{} did not finish in time and was stopped",
+                    action.tool.name
+                ),
+                0,
+            ),
+            Exit::Failed(code) if out.stderr.is_empty() => Done::failed(
+                match code {
+                    Some(code) => format!("{} failed with exit code {code}", action.tool.name),
+                    None => format!("{} was stopped by the system", action.tool.name),
+                },
+                0,
+            ),
+            Exit::Failed(_) => Done::failed(out.stderr, 0),
+        },
+        Err(e) => Done::failed(e, 0),
+    }
+}
+
 fn delete_entry(ctx: &Context, entry: &PlanEntry) -> Done {
+    let Work::Delete {
+        root: planned,
+        name,
+        ..
+    } = &entry.work
+    else {
+        return Done::skipped(SkipCause::NotInThisBuild);
+    };
     // Only rows with an executor here can run, whatever the plan says, and
     // only in the shape the row allows.
-    match (entry.catalog_id, &entry.name) {
+    match (entry.catalog_id, name) {
         (CatalogId::UserTemp, Some(_)) => {
-            let path = entry.root.path();
-            let root = match policy::validate_temp_root(ctx, path, entry.root.owner_rule()) {
+            let path = planned.path();
+            let root = match policy::validate_temp_root(ctx, path, planned.owner_rule()) {
                 Ok(root) => root,
                 Err(reason) => return Done::skipped(SkipCause::Root(reason)),
             };
-            if root.id() != entry.root.id() || root.path() != entry.root.path() {
+            if root.id() != planned.id() || root.path() != planned.path() {
                 return Done::skipped(SkipCause::ChangedSinceScan);
             }
         }
+        (CatalogId::UserLogsOld, Some(_))
+        | (
+            CatalogId::PkgNpx
+            | CatalogId::PkgCargoCache
+            | CatalogId::PkgGradleCaches
+            | CatalogId::PkgNugetHttp,
+            None,
+        ) => {
+            if let Err(cause) = roots::recheck(ctx, entry.catalog_id, planned) {
+                return Done::skipped(cause);
+            }
+        }
         (CatalogId::ThumbnailCache | CatalogId::FontCache | CatalogId::BrowserHttpCache, None) => {
-            let browser = match roots::recheck(ctx, entry.catalog_id, &entry.root) {
+            let browser = match roots::recheck(ctx, entry.catalog_id, planned) {
                 Ok(browser) => browser,
                 Err(cause) => return Done::skipped(cause),
             };
@@ -273,7 +406,7 @@ fn delete_entry(ctx: &Context, entry: &PlanEntry) -> Done {
 
 #[cfg(unix)]
 mod sys {
-    use super::{Done, PlanEntry};
+    use super::{Done, PlanEntry, Work};
     use crate::measure::{self, Facts, FileId, Kind, RawStat};
     use crate::model::SkipCause;
     use crate::policy::{self, CatalogId, Context, SkipReason};
@@ -286,28 +419,37 @@ mod sys {
 
     pub fn delete(ctx: &Context, entry: &PlanEntry) -> Done {
         let row = entry.catalog_id;
-        let root_fd = match open_dir(CWD, entry.root.path().as_os_str()) {
+        let Work::Delete {
+            root,
+            name,
+            file_id,
+            members,
+        } = &entry.work
+        else {
+            return Done::skipped(SkipCause::NotInThisBuild);
+        };
+        let root_fd = match open_dir(CWD, root.path().as_os_str()) {
             Ok(fd) => fd,
             Err(Errno::LOOP | Errno::NOTDIR) => return Done::skipped(SkipCause::ChangedSinceScan),
             Err(e) => return Done::failed(io::Error::from(e), 0),
         };
         let root_facts = match fstat(&root_fd) {
-            Ok(facts) if facts.id == entry.root.id() => facts,
+            Ok(facts) if facts.id == root.id() => facts,
             Ok(_) => return Done::skipped(SkipCause::ChangedSinceScan),
             Err(e) => return Done::failed(io::Error::from(e), 0),
         };
-        let device = Some(entry.root.id().device());
+        let device = Some(root.id().device());
         let mut tree = Tree {
             ctx,
             row,
-            members: &entry.members,
+            members,
             device,
             bytes: 0,
             error: None,
         };
-        let Some(name) = &entry.name else {
+        let Some(name) = name else {
             // A cache folder: empty it, keep it.
-            if entry.file_id != root_facts.id {
+            if *file_id != root_facts.id {
                 return Done::skipped(SkipCause::ChangedSinceScan);
             }
             if let Some(reason) = policy::entry_rule(row, ctx, &root_facts, device) {
@@ -327,10 +469,12 @@ mod sys {
             Err(Errno::NOENT) => return Done::skipped(SkipCause::Gone),
             Err(e) => return Done::failed(io::Error::from(e), 0),
         };
-        if top.id != entry.file_id {
+        if top.id != *file_id {
             return Done::skipped(SkipCause::ChangedSinceScan);
         }
-        if let Some(reason) = policy::entry_rule(row, ctx, &top, device) {
+        if let Some(reason) = policy::entry_rule(row, ctx, &top, device)
+            .or_else(|| policy::name_rule(row, name, top.kind))
+        {
             return Done::skipped(SkipCause::Entry(reason));
         }
         if top.kind != Kind::Dir {
@@ -382,13 +526,14 @@ mod sys {
         fn verify(&self, dir: &OwnedFd) -> Result<(), SkipCause> {
             let unreadable = SkipCause::Entry(SkipReason::Unreadable);
             for name in list(dir).map_err(|_| unreadable)? {
-                if policy::is_project_marker(&name) {
+                if self.row.checks_project_markers() && policy::is_project_marker(&name) {
                     return Err(SkipCause::Entry(SkipReason::Project));
                 }
                 let facts = stat_at(dir, &name).map_err(|_| unreadable)?;
                 if facts.kind != Kind::Link {
                     if let Some(reason) =
                         policy::entry_rule(self.row, self.ctx, &facts, self.device)
+                            .or_else(|| policy::name_rule(self.row, &name, facts.kind))
                     {
                         return Err(SkipCause::Entry(reason));
                     }
@@ -511,18 +656,12 @@ mod sys {
     }
 }
 
-/// The handle-relative Windows delete lands in M7 (phase 9). The engine
-/// refuses to execute on Windows before reaching this.
+/// The same walk on Windows, through `NtCreateFile` handles opened relative
+/// to their parent and `SetFileInformationByHandle` deletes (phase 9).
 #[cfg(windows)]
-mod sys {
-    use super::{Done, PlanEntry};
-    use crate::model::SkipCause;
-    use crate::policy::Context;
-
-    pub fn delete(_ctx: &Context, _entry: &PlanEntry) -> Done {
-        Done::skipped(SkipCause::NotInThisBuild)
-    }
-}
+mod win;
+#[cfg(windows)]
+use win as sys;
 
 #[cfg(test)]
 mod tests {
@@ -547,10 +686,12 @@ mod tests {
             candidate_id: CandidateId::new(1),
             catalog_id: CatalogId::LargeFilesReport,
             display_name: "cache.bin".into(),
-            root,
-            name: Some("cache.bin".into()),
-            file_id: crate::measure::file_id(&file).unwrap(),
-            members: Arc::from([]),
+            work: Work::Delete {
+                root,
+                name: Some("cache.bin".into()),
+                file_id: crate::measure::file_id(&file).unwrap(),
+                members: Arc::from([]),
+            },
         };
         let audit = Audit::start(&dir.path().join("audit"), 1, false).unwrap();
         let report = run(
@@ -588,10 +729,12 @@ mod tests {
             candidate_id: CandidateId::new(1),
             catalog_id,
             display_name: "cache.bin".into(),
-            root: root.clone(),
-            name,
-            file_id: crate::measure::file_id(&file).unwrap(),
-            members: Arc::from([]),
+            work: Work::Delete {
+                root: root.clone(),
+                name,
+                file_id: crate::measure::file_id(&file).unwrap(),
+                members: Arc::from([]),
+            },
         };
         let entries = [
             entry(CatalogId::BrowserHttpCache, Some("cache.bin".into())),

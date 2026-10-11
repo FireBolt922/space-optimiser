@@ -150,9 +150,23 @@ fn rows_have_no_roots_where_the_catalog_disables_them() {
     for platform in [Platform::Macos, Platform::Linux] {
         assert!(root_paths(&ctx, CatalogId::WindowsThumbcache, platform).is_empty());
     }
-    // Rows that are not Normal Scan rows have no cache roots here.
-    assert!(root_paths(&ctx, CatalogId::UserTemp, current).is_empty());
-    assert!(root_paths(&ctx, CatalogId::PkgCargoCache, current).is_empty());
+    // Temp, the tool rows, and the large-file report have no fixed cache
+    // folders; old logs have one on macOS only (phase 6).
+    for row in [
+        CatalogId::UserTemp,
+        CatalogId::PkgNpmCache,
+        CatalogId::PkgPnpmStore,
+        CatalogId::PkgYarnCache,
+        CatalogId::PkgPipCache,
+        CatalogId::PkgUvCache,
+        CatalogId::DockerBuildCache,
+        CatalogId::LargeFilesReport,
+    ] {
+        assert!(root_paths(&ctx, row, current).is_empty(), "{row:?}");
+    }
+    for platform in [Platform::Linux, Platform::Windows] {
+        assert!(root_paths(&ctx, CatalogId::UserLogsOld, platform).is_empty());
+    }
 }
 
 // Test 5: Normal Scan reads nothing inside `Documents`.

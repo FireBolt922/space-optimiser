@@ -2,18 +2,34 @@
 //! phase 9). Folders come from OS APIs, not from environment variables;
 //! hardening continues in M7 (phase 9).
 
+use std::ffi::OsString;
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::model::CandidateId;
 use crate::policy::Context;
 #[cfg(target_os = "linux")]
 use crate::policy::OwnerRule;
-use crate::{EngineError, Result};
 
-pub(crate) fn reveal(_candidate: CandidateId) -> Result<()> {
-    Err(EngineError::Unsupported)
+/// The fixed command that shows an item in the OS file manager (phase 9
+/// item 1). Built from a candidate's path, never from a path the UI sent.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevealCommand {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+}
+
+/// `open -R <target>` on macOS, `xdg-open <parent>` on Linux, and Explorer
+/// `/select,"<target>"` on Windows. None when the file manager is missing.
+pub fn reveal_command(target: &Path) -> Option<RevealCommand> {
+    sys::reveal_command(target)
+}
+
+/// The person's Downloads folder, if it exists. Reports are saved there;
+/// the folder is never created.
+pub(crate) fn downloads_dir(ctx: &Context) -> Option<PathBuf> {
+    sys::downloads_dir(ctx).filter(|dir| dir.is_dir())
 }
 
 /// Folders under a home that are never walked for deletion (catalog
@@ -68,31 +84,61 @@ pub(crate) fn protected_under_home(home: &Path) -> Vec<PathBuf> {
 /// path). A value equal to the home itself means "unset" in the XDG spec and
 /// is dropped, so the home never becomes a protected folder by accident.
 pub fn parse_user_dirs(contents: &str, home: &Path) -> Vec<PathBuf> {
-    contents
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.trim().split_once('=')?;
-            if !(key.starts_with("XDG_") && key.ends_with("_DIR")) {
-                return None;
-            }
-            let value = value.strip_prefix('"')?.strip_suffix('"')?;
-            let path = match value.strip_prefix("$HOME") {
-                Some(rest) => home.join(rest.trim_start_matches('/')),
-                None if value.starts_with('/') => PathBuf::from(value),
-                None => return None,
-            };
-            (path != home).then_some(path)
-        })
+    user_dir_entries(contents, home)
+        .map(|(_, path)| path)
         .collect()
+}
+
+/// Each `XDG_<NAME>_DIR` key in `user-dirs.dirs` with its folder, under the
+/// rules of [`parse_user_dirs`].
+fn user_dir_entries<'a>(
+    contents: &'a str,
+    home: &'a Path,
+) -> impl Iterator<Item = (&'a str, PathBuf)> + 'a {
+    contents.lines().filter_map(move |line| {
+        let (key, value) = line.trim().split_once('=')?;
+        if !(key.starts_with("XDG_") && key.ends_with("_DIR")) {
+            return None;
+        }
+        let value = value.strip_prefix('"')?.strip_suffix('"')?;
+        let path = match value.strip_prefix("$HOME") {
+            Some(rest) => home.join(rest.trim_start_matches('/')),
+            None if value.starts_with('/') => PathBuf::from(value),
+            None => return None,
+        };
+        (path != home).then_some((key, path))
+    })
 }
 
 pub(crate) fn owned_by_user(ctx: &Context, path: &Path, metadata: &Metadata) -> bool {
     sys::owned_by_user(ctx, path, metadata)
 }
 
-/// Resolves this machine's home, protected folders, and temp roots.
+/// Resolves this machine's home, protected folders, temp roots, and where
+/// tools are looked for.
 pub fn resolve_context() -> io::Result<Context> {
-    sys::resolve_context()
+    Ok(with_tools(sys::resolve_context()?))
+}
+
+/// The app's `PATH` (absolute folders only), the catalog's fixed install
+/// folders, and the Docker variables that decide where Docker points. Tools
+/// get nothing else from this environment (phase 6 item 1).
+fn with_tools(ctx: Context) -> Context {
+    let path = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .filter(|d| d.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default();
+    let install = crate::tool::install_dirs(ctx.home(), ctx.local_app_data());
+    let mut ctx = ctx.with_tool_dirs(path, install);
+    for key in ["DOCKER_HOST", "DOCKER_CONTEXT"] {
+        if let Some(value) = std::env::var_os(key) {
+            ctx = ctx.with_tool_env(key, value);
+        }
+    }
+    ctx
 }
 
 #[cfg(unix)]
@@ -137,6 +183,18 @@ mod sys {
         metadata.uid() == ctx.euid()
     }
 
+    /// `open -R` selects the item in a Finder window.
+    pub fn reveal_command(target: &Path) -> Option<RevealCommand> {
+        Some(RevealCommand {
+            program: PathBuf::from("/usr/bin/open"),
+            args: vec![OsString::from("-R"), target.as_os_str().to_owned()],
+        })
+    }
+
+    pub fn downloads_dir(ctx: &Context) -> Option<PathBuf> {
+        Some(ctx.home().join("Downloads"))
+    }
+
     pub fn resolve_context() -> io::Result<Context> {
         let home = home_from_passwd()?;
         let temp = user_temp_dir()?;
@@ -177,6 +235,34 @@ mod sys {
         metadata.uid() == ctx.euid()
     }
 
+    /// `xdg-open` cannot select an item, so it opens the folder holding it.
+    /// Only the system copies are used, never one found on `PATH`.
+    pub fn reveal_command(target: &Path) -> Option<RevealCommand> {
+        let program = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file()))?;
+        let folder = target.parent()?;
+        Some(RevealCommand {
+            program,
+            args: vec![folder.as_os_str().to_owned()],
+        })
+    }
+
+    /// `XDG_DOWNLOAD_DIR` from `user-dirs.dirs` (it may be localised),
+    /// else `~/Downloads`.
+    pub fn downloads_dir(ctx: &Context) -> Option<PathBuf> {
+        let home = ctx.home();
+        let configured = fs::read_to_string(home.join(".config/user-dirs.dirs"))
+            .ok()
+            .and_then(|contents| {
+                user_dir_entries(&contents, home)
+                    .find(|(key, _)| *key == "XDG_DOWNLOAD_DIR")
+                    .map(|(_, path)| path)
+            });
+        Some(configured.unwrap_or_else(|| home.join("Downloads")))
+    }
+
     pub fn resolve_context() -> io::Result<Context> {
         let home = home_from_passwd()?;
         // `/tmp` is shared, so each entry's owner is checked. `/var/tmp` is
@@ -198,6 +284,25 @@ mod sys {
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 compile_error!("Space Optimiser supports macOS, Linux, and Windows only.");
 
+/// Explorer does not understand `\\?\` paths: `\\?\C:\x` becomes
+/// `C:\x` and `\\?\UNC\server\x` becomes `\\server\x`.
+#[cfg(any(windows, test))]
+fn without_verbatim_prefix(units: &[u16]) -> Vec<u16> {
+    let utf16 = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    let unc = utf16(r"\\?\UNC\");
+    let verbatim = utf16(r"\\?\");
+    if units.starts_with(&unc) {
+        utf16(r"\\")
+            .into_iter()
+            .chain(units[unc.len()..].iter().copied())
+            .collect()
+    } else if units.starts_with(&verbatim) {
+        units[verbatim.len()..].to_vec()
+    } else {
+        units.to_vec()
+    }
+}
+
 #[cfg(windows)]
 pub(crate) fn wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
@@ -208,7 +313,7 @@ pub(crate) fn wide(path: &Path) -> Vec<u16> {
 mod sys {
     use super::*;
     use crate::policy::OwnerRule;
-    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, LocalFree};
     use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
@@ -222,9 +327,29 @@ mod sys {
     use windows_sys::Win32::UI::Shell::{
         FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
         FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_SkyDrive, FOLDERID_Videos,
-        SHGetKnownFolderPath,
+        FOLDERID_Windows, SHGetKnownFolderPath,
     };
     use windows_sys::core::{GUID, PWSTR};
+
+    /// `explorer.exe /select,"<path>"` from the Windows folder. The single
+    /// argument is passed as written (`raw_arg`), because Explorer parses
+    /// its own command line.
+    pub fn reveal_command(target: &Path) -> Option<RevealCommand> {
+        let program = known_folder(&FOLDERID_Windows).ok()?.join("explorer.exe");
+        let units = without_verbatim_prefix(&target.as_os_str().encode_wide().collect::<Vec<_>>());
+        let mut arg = OsString::from("/select,\"");
+        arg.push(OsString::from_wide(&units));
+        arg.push("\"");
+        Some(RevealCommand {
+            program,
+            args: vec![arg],
+        })
+    }
+
+    /// The Downloads Known Folder, which follows redirection.
+    pub fn downloads_dir(_ctx: &Context) -> Option<PathBuf> {
+        known_folder(&FOLDERID_Downloads).ok()
+    }
 
     pub fn resolve_context() -> io::Result<Context> {
         let home = known_folder(&FOLDERID_Profile)?;
@@ -361,5 +486,25 @@ mod sys {
         // SAFETY: `token` was opened above.
         unsafe { CloseHandle(token) };
         sids
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_verbatim_prefix;
+
+    fn strip(path: &str) -> String {
+        String::from_utf16(&without_verbatim_prefix(
+            &path.encode_utf16().collect::<Vec<_>>(),
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn explorer_gets_paths_without_the_verbatim_prefix() {
+        assert_eq!(strip(r"\\?\C:\Users\a b\x."), r"C:\Users\a b\x.");
+        assert_eq!(strip(r"\\?\UNC\server\share\x"), r"\\server\share\x");
+        assert_eq!(strip(r"C:\plain"), r"C:\plain");
+        assert_eq!(strip(r"\\server\share"), r"\\server\share");
     }
 }

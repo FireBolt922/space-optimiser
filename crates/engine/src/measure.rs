@@ -7,12 +7,14 @@ use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
-/// Device and inode on Unix; volume serial and file index on Windows.
+/// Device and inode on Unix; volume serial and file id on Windows.
 /// Protected folders and hard links are compared by this, never by string.
+/// The index is 128 bits because ReFS (Dev Drive) file ids are: its 64-bit
+/// `nFileIndex` is documented as not unique. A Unix inode widens losslessly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileId {
     device: u64,
-    index: u64,
+    index: u128,
 }
 
 impl FileId {
@@ -49,6 +51,12 @@ pub fn free_space(path: &Path) -> io::Result<u64> {
     sys::free_space(path)
 }
 
+/// Whether `path` is on a network volume (NFS, SMB, AFP, a mapped drive).
+/// The large-file report skips a home there (phase 6 item 9).
+pub fn is_network_volume(path: &Path) -> bool {
+    sys::is_network_volume(path)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntryInfo {
     pub id: FileId,
@@ -65,14 +73,50 @@ pub(crate) fn entry_info(path: &Path, metadata: &Metadata) -> io::Result<EntryIn
 pub(crate) enum Kind {
     File,
     Dir,
-    /// A symlink, junction, or other reparse point.
+    /// A symlink, or on Windows a symbolic link or junction (mount point).
     Link,
-    // Windows reports neither through `std` metadata; its AF_UNIX sockets
-    // are reparse points, which are links here.
-    #[cfg_attr(windows, allow(dead_code))]
+    /// A socket or FIFO; on Windows an AF_UNIX socket reparse point.
     SocketOrPipe,
-    #[cfg_attr(windows, allow(dead_code))]
+    /// A device file; on Windows any other reparse point (cloud placeholder,
+    /// app execution alias, deduplicated file, ...). Skipped, never deleted.
     Device,
+}
+
+/// `FILE_ATTRIBUTE_DIRECTORY`, `FILE_ATTRIBUTE_REPARSE_POINT`, and the
+/// reparse tags [`kind_from`] tells apart. The tags come from a
+/// `windows-sys` feature this crate does not otherwise need.
+const ATTRIBUTE_DIRECTORY: u32 = 0x10;
+const ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+const TAG_MOUNT_POINT: u32 = 0xA000_0003;
+const TAG_SYMLINK: u32 = 0xA000_000C;
+const TAG_AF_UNIX: u32 = 0x8000_0023;
+
+#[cfg(windows)]
+const _: () = {
+    use windows_sys::Win32::Storage::FileSystem as fs;
+    assert!(ATTRIBUTE_DIRECTORY == fs::FILE_ATTRIBUTE_DIRECTORY);
+    assert!(ATTRIBUTE_REPARSE_POINT == fs::FILE_ATTRIBUTE_REPARSE_POINT);
+};
+
+/// What a Windows entry is, from its attributes and (for a reparse point)
+/// its reparse tag. The scanner and the executor both call this. Only
+/// symbolic links and junctions count as links; an AF_UNIX socket is a
+/// socket; any other reparse point is a special file, so the entry holding
+/// it is skipped whole rather than deleted or followed.
+#[cfg_attr(unix, allow(dead_code))]
+pub(crate) fn kind_from(attributes: u32, reparse_tag: u32) -> Kind {
+    if attributes & ATTRIBUTE_REPARSE_POINT != 0 {
+        return match reparse_tag {
+            TAG_SYMLINK | TAG_MOUNT_POINT => Kind::Link,
+            TAG_AF_UNIX => Kind::SocketOrPipe,
+            _ => Kind::Device,
+        };
+    }
+    if attributes & ATTRIBUTE_DIRECTORY != 0 {
+        Kind::Dir
+    } else {
+        Kind::File
+    }
 }
 
 /// One `lstat` of an entry: everything the entry rules read. The scanner
@@ -88,7 +132,8 @@ pub(crate) struct Facts {
     pub uid: u32,
     /// Immutable (macOS) or read-only (Windows files).
     pub locked: bool,
-    /// The two age timestamps; see [`age_times`].
+    /// The two age timestamps: `mtime` and `ctime` on Unix, last write and
+    /// creation on Windows. See [`crate::policy::is_old`].
     pub times: (SystemTime, SystemTime),
     pub size: Size,
 }
@@ -119,6 +164,17 @@ pub(crate) fn facts_from_stat(raw: &RawStat) -> Facts {
     sys::facts_from_stat(raw)
 }
 
+/// The facts of an open handle: the scanner's handle on a path, or the
+/// executor's handle opened relative to its parent. The handle must have
+/// been opened with `FILE_FLAG_OPEN_REPARSE_POINT` (or
+/// `FILE_OPEN_REPARSE_POINT`) and `FILE_READ_ATTRIBUTES`.
+#[cfg(windows)]
+pub(crate) fn facts_from_handle(
+    handle: std::os::windows::io::BorrowedHandle<'_>,
+) -> io::Result<Facts> {
+    sys::facts_from_handle(handle)
+}
+
 #[cfg(unix)]
 mod sys {
     use super::{EntryInfo, Facts, FileId, Kind, RawStat, Size};
@@ -133,7 +189,7 @@ mod sys {
         Ok(EntryInfo {
             id: FileId {
                 device: metadata.dev(),
-                index: metadata.ino(),
+                index: u128::from(metadata.ino()),
             },
             links: metadata.nlink(),
         })
@@ -179,7 +235,7 @@ mod sys {
             kind,
             id: FileId {
                 device: raw.device,
-                index: raw.inode,
+                index: u128::from(raw.inode),
             },
             links: raw.links,
             uid: raw.uid,
@@ -205,6 +261,42 @@ mod sys {
         }
     }
 
+    /// macOS: the mount is not `MNT_LOCAL`.
+    #[cfg(target_os = "macos")]
+    pub fn is_network_volume(path: &Path) -> bool {
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: an all-zero statfs is a valid out-parameter.
+        let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c_path` is NUL-terminated and `stat` is writable.
+        let ok = unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } == 0;
+        ok && stat.f_flags & libc::MNT_LOCAL as u32 == 0
+    }
+
+    /// Linux: the filesystem type is a network one.
+    #[cfg(target_os = "linux")]
+    #[allow(clippy::unnecessary_cast)] // `f_type` width differs between Linux targets
+    pub fn is_network_volume(path: &Path) -> bool {
+        const NETWORK: [i64; 7] = [
+            0x6969,      // NFS
+            0x517B,      // SMB
+            0xFF53_4D42, // CIFS
+            0xFE53_4D42, // SMB2
+            0x7375_7245, // Coda
+            0x5346_414F, // AFS
+            0x0BD0_0BD0, // Lustre
+        ];
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: an all-zero statfs is a valid out-parameter.
+        let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c_path` is NUL-terminated and `stat` is writable.
+        let ok = unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } == 0;
+        ok && NETWORK.contains(&(stat.f_type as i64))
+    }
+
     #[allow(clippy::unnecessary_cast)] // field widths differ between macOS and Linux
     pub fn free_space(path: &Path) -> io::Result<u64> {
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
@@ -226,13 +318,17 @@ mod sys {
     use std::fs::{Metadata, OpenOptions};
     use std::io;
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
     use std::path::Path;
-    use std::time::SystemTime;
-    use windows_sys::Win32::Foundation::{GetLastError, NO_ERROR};
+    use std::time::{Duration, SystemTime};
+    use windows_sys::Win32::Foundation::{FILETIME, GetLastError, NO_ERROR};
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        GetCompressedFileSizeW, GetDiskFreeSpaceExW, GetFileInformationByHandle, INVALID_FILE_SIZE,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_COMPRESSION_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+        FILE_READ_ATTRIBUTES, FileAttributeTagInfo, FileCompressionInfo, FileIdInfo,
+        GetCompressedFileSizeW, GetDiskFreeSpaceExW, GetFileInformationByHandle,
+        GetFileInformationByHandleEx, INVALID_FILE_SIZE, SYNCHRONIZE,
     };
 
     pub fn entry_info(path: &Path, _metadata: &Metadata) -> io::Result<EntryInfo> {
@@ -249,12 +345,43 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         Ok(EntryInfo {
-            id: FileId {
-                device: u64::from(info.dwVolumeSerialNumber),
-                index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-            },
+            id: file_id_of(file.as_handle(), &info),
             links: u64::from(info.nNumberOfLinks),
         })
+    }
+
+    /// The identity of an open handle. Both the scanner (`entry_info`) and
+    /// the executor (`facts_from_handle`) read it here, so they agree.
+    /// `FileIdInfo` gives the 64-bit volume serial and the 128-bit file id
+    /// (unique on ReFS, where `nFileIndex` is not). If the file system does
+    /// not support it (FAT, some network redirectors) the 32-bit serial and
+    /// 64-bit index from `info` stand in. Support is a property of the file
+    /// system, so every handle on one volume takes the same branch.
+    fn file_id_of(handle: BorrowedHandle<'_>, info: &BY_HANDLE_FILE_INFORMATION) -> FileId {
+        let mut id = FILE_ID_INFO::default();
+        // SAFETY: `id` is a writable FILE_ID_INFO of the size passed, and
+        // `handle` is open for the duration of the call.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle(),
+                FileIdInfo,
+                (&raw mut id).cast(),
+                std::mem::size_of::<FILE_ID_INFO>() as u32,
+            )
+        };
+        if ok != 0 {
+            FileId {
+                device: id.VolumeSerialNumber,
+                index: u128::from_le_bytes(id.FileId.Identifier),
+            }
+        } else {
+            FileId {
+                device: u64::from(info.dwVolumeSerialNumber),
+                index: u128::from(
+                    (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+                ),
+            }
+        }
     }
 
     pub fn allocated_size(path: &Path, metadata: &Metadata) -> Size {
@@ -281,38 +408,129 @@ mod sys {
         }
     }
 
-    pub fn age_times(metadata: &Metadata) -> io::Result<(SystemTime, SystemTime)> {
-        Ok((metadata.modified()?, metadata.created()?))
+    /// The entry itself is opened (never a reparse point's target), with
+    /// attribute access only, which no sharing mode blocks. Windows checks
+    /// the owner of the temp root only (catalog `user-temp`).
+    pub fn facts(path: &Path, _metadata: &Metadata) -> io::Result<Facts> {
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        facts_from_handle(file.as_handle())
     }
 
-    /// Symlinks, junctions, mount points, cloud placeholders, and app
-    /// execution aliases are all reparse points. Windows checks the owner of
-    /// the temp root only (catalog `user-temp`), so `uid` is `None`.
-    pub fn facts(path: &Path, metadata: &Metadata) -> io::Result<Facts> {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
-        };
-        let attributes = metadata.file_attributes();
-        let kind = if metadata.file_type().is_symlink()
-            || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        {
-            Kind::Link
-        } else if metadata.is_dir() {
-            Kind::Dir
+    /// Identity and times from `GetFileInformationByHandle`, the reparse tag
+    /// from `FileAttributeTagInfo`, and the size from `FileCompressionInfo`
+    /// (what `GetCompressedFileSizeW` reports), all on the one handle.
+    pub fn facts_from_handle(handle: BorrowedHandle<'_>) -> io::Result<Facts> {
+        let raw = handle.as_raw_handle();
+        // SAFETY: an all-zero struct is a valid out-parameter.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `handle` is open for the duration of the call and `info`
+        // is writable.
+        if unsafe { GetFileInformationByHandle(raw, &mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let attributes = info.dwFileAttributes;
+        let tag = if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+            // SAFETY: `tag` is a writable FILE_ATTRIBUTE_TAG_INFO of the size
+            // passed, and `handle` is open for the duration of the call.
+            let ok = unsafe {
+                GetFileInformationByHandleEx(
+                    raw,
+                    FileAttributeTagInfo,
+                    (&raw mut tag).cast(),
+                    std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            tag.ReparseTag
         } else {
-            Kind::File
+            0
         };
-        let info = entry_info(path, metadata)?;
+        let kind = super::kind_from(attributes, tag);
+        let size = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            Size {
+                bytes: 0,
+                exact: true,
+            }
+        } else {
+            compressed_size(handle).unwrap_or(Size {
+                bytes: (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow),
+                exact: false,
+            })
+        };
         Ok(Facts {
             kind,
-            id: info.id,
-            links: info.links,
+            id: file_id_of(handle, &info),
+            links: u64::from(info.nNumberOfLinks),
             // On folders the read-only bit is a shell hint, not a protection.
             locked: kind == Kind::File && attributes & FILE_ATTRIBUTE_READONLY != 0,
-            times: age_times(metadata)?,
-            size: allocated_size(path, metadata),
+            times: (
+                file_time(info.ftLastWriteTime),
+                file_time(info.ftCreationTime),
+            ),
+            size,
         })
+    }
+
+    fn compressed_size(handle: BorrowedHandle<'_>) -> Option<Size> {
+        let mut info = FILE_COMPRESSION_INFO::default();
+        // SAFETY: `info` is a writable FILE_COMPRESSION_INFO of the size
+        // passed, and `handle` is open for the duration of the call.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle(),
+                FileCompressionInfo,
+                (&raw mut info).cast(),
+                std::mem::size_of::<FILE_COMPRESSION_INFO>() as u32,
+            )
+        };
+        (ok != 0).then(|| Size {
+            bytes: u64::try_from(info.CompressedFileSize).unwrap_or(0),
+            exact: true,
+        })
+    }
+
+    /// A `FILETIME` (100 ns ticks since 1601) as the `SystemTime` that
+    /// `std` metadata reports for it.
+    fn file_time(time: FILETIME) -> SystemTime {
+        const TICKS_TO_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+        let ticks = (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        let span = |ticks: u64| {
+            Duration::from_secs(ticks / 10_000_000) + Duration::from_nanos(ticks % 10_000_000 * 100)
+        };
+        if ticks >= TICKS_TO_UNIX_EPOCH {
+            SystemTime::UNIX_EPOCH + span(ticks - TICKS_TO_UNIX_EPOCH)
+        } else {
+            SystemTime::UNIX_EPOCH
+                .checked_sub(span(TICKS_TO_UNIX_EPOCH - ticks))
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        }
+    }
+
+    /// A mapped network drive or a UNC path.
+    pub fn is_network_volume(path: &Path) -> bool {
+        use std::path::{Component, Prefix};
+        use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+        // `DRIVE_REMOTE`, from a feature this crate does not otherwise need.
+        const DRIVE_REMOTE: u32 = 4;
+        let root = match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::UNC(..) | Prefix::VerbatimUNC(..) => return true,
+                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                    format!("{}:\\", letter as char)
+                }
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let name: Vec<u16> = root.encode_utf16().chain([0]).collect();
+        // SAFETY: `name` is NUL-terminated.
+        unsafe { GetDriveTypeW(name.as_ptr()) == DRIVE_REMOTE }
     }
 
     pub fn free_space(path: &Path) -> io::Result<u64> {
@@ -331,5 +549,53 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         Ok(available)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Only symbolic links and junctions are links. Every other reparse
+    // point is skipped whole, never followed and never deleted.
+    #[test]
+    fn windows_reparse_points_are_told_apart_by_tag() {
+        let reparse = ATTRIBUTE_REPARSE_POINT;
+        let dir = ATTRIBUTE_DIRECTORY;
+        assert_eq!(kind_from(0, 0), Kind::File);
+        assert_eq!(kind_from(dir, 0), Kind::Dir);
+        assert_eq!(kind_from(reparse, TAG_SYMLINK), Kind::Link);
+        assert_eq!(kind_from(reparse | dir, TAG_SYMLINK), Kind::Link);
+        assert_eq!(kind_from(reparse | dir, TAG_MOUNT_POINT), Kind::Link);
+        assert_eq!(kind_from(reparse, TAG_AF_UNIX), Kind::SocketOrPipe);
+        // A OneDrive placeholder, an app execution alias, a deduplicated
+        // file, and a tag the check cannot read.
+        for tag in [0x9000_601A, 0x8000_001B, 0x8000_0013, 0] {
+            assert_eq!(kind_from(reparse, tag), Kind::Device, "{tag:#x}");
+            assert_eq!(kind_from(reparse | dir, tag), Kind::Device, "{tag:#x}");
+        }
+    }
+
+    // The scanner's identity (`file_id`, the protected-folder and root
+    // checks) and the executor's (`facts`, `facts_from_handle`) must be
+    // read the same way, or a re-check before removal would see "changed".
+    #[test]
+    fn scanner_and_executor_read_the_same_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.bin");
+        fs::write(&file, b"bytes").unwrap();
+        for path in [dir.path(), file.as_path()] {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            let id = file_id(path).unwrap();
+            assert_eq!(facts(path, &metadata).unwrap().id, id, "{path:?}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                // The inode widens into the 128-bit index without loss.
+                let wide: u128 = id.index;
+                assert_eq!(wide, u128::from(metadata.ino()));
+                assert_eq!(id.device(), metadata.dev());
+            }
+        }
     }
 }

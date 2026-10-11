@@ -1,10 +1,13 @@
-# Capability review (milestones M1 and M3, phase 3):
+# Capability review (milestones M1, M3, M6, and M7, phase 3):
 # - No shell, fs, dialog, http, or opener plugin is installed or granted.
+#   "Show in folder" starts the OS file manager from the engine, and
+#   "Export report" writes from the engine, so neither needs a plugin.
 # - No core permission is granted. The window polls get_scan and get_run for
 #   progress, so it needs no event permission either.
 # - The app's own commands (start_scan, cancel_scan, get_scan, build_plan,
-#   confirm_plan, execute_plan, get_run, stop_run, interrupted_run, reveal)
-#   take typed payloads with deny_unknown_fields, or none. None accepts a path.
+#   confirm_plan, execute_plan, get_run, stop_run, interrupted_run, reveal,
+#   export_report, app_info) take typed payloads with deny_unknown_fields,
+#   or none. None accepts a path; reveal and export_report take an id.
 # - The webview loads no remote content; see the CSP in tauri.conf.json.
 identifier = "default"
 description = "The main window. Grants nothing beyond the app's own typed commands."
