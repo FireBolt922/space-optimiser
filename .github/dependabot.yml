@@ -13,9 +13,14 @@ updates:
     commit-message:
       prefix: "build"
     # A major version is a deliberate change with a plan update, not a bot PR.
+    # Tauri's crates and npm packages must share MAJOR.MINOR (`tauri build`
+    # refuses otherwise), so a Tauri minor version is raised by hand on both
+    # sides at once; tests/packaging.rs checks they match.
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "tauri*"
+        update-types: ["version-update:semver-minor"]
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
@@ -28,6 +33,9 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # See the cargo entry: Tauri minor versions move by hand.
+      - dependency-name: "@tauri-apps/*"
+        update-types: ["version-update:semver-minor"]
     groups:
       desktop-minor-and-patch:
         update-types: [minor, patch]
