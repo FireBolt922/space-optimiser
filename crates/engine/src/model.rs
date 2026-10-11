@@ -411,6 +411,9 @@ pub struct ReportItem {
     pub bytes_removed: u64,
     /// What to expect now (phase 8 item 10). Set for removed items.
     pub recovery_text: Option<&'static str>,
+    /// What to do about a busy tool, for an item skipped as
+    /// [`SkipCause::ToolBusy`].
+    pub hint: Option<&'static str>,
 }
 
 /// Free space on one volume, as the system reports it.
@@ -452,14 +455,49 @@ pub enum RunStatus {
     Finished,
 }
 
+/// The item a run is working on now.
+#[derive(Debug, Clone, Serialize)]
+pub struct CurrentItem {
+    /// Its position in the plan, from 0.
+    pub index: usize,
+    pub display_name: String,
+    pub catalog_id: CatalogId,
+    pub elapsed_ms: u64,
+    /// The last lines its tool printed, oldest first, cleaned of terminal
+    /// codes. A tool row's first line names the command. Empty for deletes.
+    pub output: Vec<String>,
+}
+
+/// Finished items so far, by outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct RunCounts {
+    /// Removed, or a tool's clean command ran.
+    pub removed: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunView {
     pub plan_id: PlanId,
     pub status: RunStatus,
     pub items_done: usize,
     pub items_total: usize,
+    /// Since the run started.
+    pub elapsed_ms: u64,
+    /// None between items and once the run is over.
+    pub current: Option<CurrentItem>,
+    /// The most recently finished items, newest last (at most
+    /// [`RECENT_ITEMS`]).
+    pub recent: Vec<ReportItem>,
+    pub counts: RunCounts,
     pub report: Option<Report>,
 }
+
+/// How many finished items a [`RunView`] carries.
+pub const RECENT_ITEMS: usize = 20;
+/// How many output lines a [`CurrentItem`] keeps.
+pub const OUTPUT_LINES: usize = 50;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InterruptedAction {

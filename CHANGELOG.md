@@ -20,11 +20,17 @@ minor version can change behaviour.
 - "Left alone" groups skipped items by reason, with a sentence on why each
   reason keeps an item out.
 
+- The Cleaning screen shows the item in progress and how long it has run,
+  the lines a tool such as uv prints (starting with the exact command and the
+  uv it runs), each finished item with its outcome, and counts. A tool that
+  is busy because another process holds its cache says what to close.
+
 ### Changed
 
 - Scan again reruns the same scan mode instead of returning to the start
   screen.
 - Large counts are written with thousands separators.
+- The progress bar uses the app's colours instead of the system's light grey.
 
 ## [0.2.0] - 2026-10-11
 

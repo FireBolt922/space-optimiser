@@ -9,6 +9,7 @@ import type {
   InterruptedRun,
   Plan,
   Report,
+  RunView,
   ScanView,
 } from "../engine";
 
@@ -209,18 +210,22 @@ export const REPORT: Report = {
       catalog_id: "user-temp",
       display_name: "old-download.bin",
       outcome: "removed",
+      reason: null,
       detail: null,
       bytes_removed: 2 * 1024 * 1024,
       recovery_text: "Files older than a day were removed from the temporary folder.",
+      hint: null,
     },
     {
       candidate_id: 2,
       catalog_id: "user-temp",
       display_name: XSS_NAME,
       outcome: "skipped",
+      reason: "changed_since_scan",
       detail: "it changed since the scan",
       bytes_removed: 0,
       recovery_text: null,
+      hint: null,
     },
   ],
   bytes_removed: 2 * 1024 * 1024,
@@ -236,6 +241,40 @@ export const REPORT: Report = {
   ],
   audit_log: "written",
   memory_log: [],
+};
+
+/** A run on its second item: npm was busy, uv is printing. */
+export const RUNNING: RunView = {
+  plan_id: 11,
+  status: "running",
+  items_done: 1,
+  items_total: 2,
+  elapsed_ms: 62_000,
+  current: {
+    index: 1,
+    display_name: "~/.cache/uv",
+    catalog_id: "pkg-uv-cache",
+    elapsed_ms: 41_000,
+    output: [
+      "Running /opt/homebrew/bin/uv cache clean",
+      "Clearing cache at: /Users/test/.cache/uv",
+    ],
+  },
+  recent: [
+    {
+      candidate_id: 30,
+      catalog_id: "pkg-npm-cache",
+      display_name: "~/.npm",
+      outcome: "skipped",
+      reason: "tool_busy",
+      detail: "the tool is busy with another process. Try again later",
+      bytes_removed: 0,
+      recovery_text: null,
+      hint: "Another install is using the cache. Let it finish or close it, then run the cleanup again.",
+    },
+  ],
+  counts: { removed: 0, skipped: 1, failed: 0 },
+  report: null,
 };
 
 export const APP_INFO: AppInfo = {
@@ -294,14 +333,18 @@ export function fakeEngine(options: FakeOptions = {}) {
       return "token-1";
     }),
     executePlan: vi.fn(async () => executes.shift() ?? { status: "started" as const }),
-    getRun: vi.fn(async () =>
+    getRun: vi.fn(async (): Promise<RunView> =>
       options.runStays
-        ? { plan_id: 11, status: "running" as const, items_done: 1, items_total: 2, report: null }
+        ? RUNNING
         : {
             plan_id: 11,
-            status: "finished" as const,
+            status: "finished",
             items_done: 2,
             items_total: 2,
+            elapsed_ms: 3000,
+            current: null,
+            recent: [],
+            counts: { removed: 1, skipped: 1, failed: 0 },
             report: options.report ?? REPORT,
           },
     ),

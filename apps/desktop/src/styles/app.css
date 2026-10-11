@@ -625,3 +625,58 @@ details.card summary,
 .subgroup > .group-more {
   align-self: flex-start;
 }
+
+/* Cleaning: the current item, what its tool prints, and finished items. */
+.run-current {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.run-output {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-finished {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.run-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* WebKit draws an unstyled progress bar light grey; use the tokens instead. */
+.progress {
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.progress::-webkit-progress-bar {
+  background: var(--surface-sunken);
+}
+
+.progress::-webkit-progress-value {
+  background: var(--primary);
+}
+
+.progress::-moz-progress-bar {
+  background: var(--primary);
+}

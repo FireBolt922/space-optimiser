@@ -10,6 +10,7 @@ import {
   type InterruptedRun,
   type Plan,
   type Report,
+  type RunView,
   type ScanMode,
   type ScanView,
 } from "./engine";
@@ -49,7 +50,14 @@ type Screen =
       token: string;
       diskFull: boolean;
     }
-  | { kind: "running"; planId: number; done: number; total: number; stopping: boolean }
+  | {
+      kind: "running";
+      planId: number;
+      done: number;
+      total: number;
+      stopping: boolean;
+      run?: RunView;
+    }
   | { kind: "report"; report: Report };
 
 export default function App({ engine }: { engine: Engine }) {
@@ -140,7 +148,7 @@ export default function App({ engine }: { engine: Engine }) {
           setScreen({ kind: "report", report: run.report });
         } else {
           setScreen((s) =>
-            s.kind === "running" ? { ...s, done: run.items_done, total: run.items_total } : s,
+            s.kind === "running" ? { ...s, done: run.items_done, total: run.items_total, run } : s,
           );
           timer = setTimeout(tick, POLL_MS);
         }
@@ -283,7 +291,13 @@ export default function App({ engine }: { engine: Engine }) {
         />
       )}
       {screen.kind === "running" && (
-        <Running done={screen.done} total={screen.total} stopping={screen.stopping} onStop={stop} />
+        <Running
+          done={screen.done}
+          total={screen.total}
+          run={screen.run}
+          stopping={screen.stopping}
+          onStop={stop}
+        />
       )}
       {screen.kind === "report" && (
         <ReportScreen

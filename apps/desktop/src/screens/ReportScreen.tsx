@@ -146,6 +146,7 @@ export function ReportScreen({ report, platform, onExport, onDone }: Props) {
                     <span className="file-name">{item.display_name}</span>
                     {item.bytes_removed > 0 && <> — {formatBytes(item.bytes_removed)}</>}
                     {item.detail && <>: {item.detail}</>}
+                    {item.hint && <span className="notice notice-warning">{item.hint}</span>}
                   </li>
                 ))}
               </ul>

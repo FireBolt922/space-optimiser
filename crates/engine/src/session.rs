@@ -4,7 +4,7 @@
 //! `get_run`, so the webview needs no event permission. "Show in folder",
 //! the report export, and the About data also take ids, never paths.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -14,11 +14,12 @@ use crate::audit::{self, Audit};
 use crate::clock::{Clock, PLAN_LIFETIME, Stamp, SystemClock};
 use crate::dedup;
 use crate::discover::{self, CancelToken, Progress, RootOutcome, Scan, ScanError};
-use crate::execute::{self, Measure, PlanEntry};
+use crate::execute::{self, Measure, PlanEntry, RunEvent};
 use crate::model::{
-    Action, AppInfo, BuildPlanArgs, Candidate, ConfirmationToken, ExecutePlanArgs, ExecuteStart,
-    ExportedReport, InterruptedRun, Plan, PlanId, PlanItem, PlanRef, Platform, Report, RevealArgs,
-    RootView, RunStatus, RunView, ScanId, ScanMode, ScanRef, ScanStatus, ScanView, SkippedView,
+    Action, AppInfo, BuildPlanArgs, Candidate, ConfirmationToken, CurrentItem, ExecutePlanArgs,
+    ExecuteStart, ExportedReport, InterruptedRun, OUTPUT_LINES, Outcome, Plan, PlanId, PlanItem,
+    PlanRef, Platform, RECENT_ITEMS, Report, ReportItem, RevealArgs, RootView, RunCounts,
+    RunStatus, RunView, ScanId, ScanMode, ScanRef, ScanStatus, ScanView, SkippedView,
     StartScanArgs,
 };
 use crate::platform::RevealCommand;
@@ -165,7 +166,24 @@ struct RunSlot {
     stop: CancelToken,
     done: usize,
     total: usize,
+    started: Instant,
+    current: Option<Current>,
+    recent: VecDeque<ReportItem>,
+    counts: RunCounts,
     report: Option<Report>,
+}
+
+/// The item a run is on, with the lines its tool has printed so far.
+struct Current {
+    index: usize,
+    display_name: String,
+    catalog_id: CatalogId,
+    started: Instant,
+    output: VecDeque<String>,
+}
+
+fn millis(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 impl Engine {
@@ -382,6 +400,10 @@ impl Engine {
                 stop: stop.clone(),
                 done: 0,
                 total,
+                started: Instant::now(),
+                current: None,
+                recent: VecDeque::new(),
+                counts: RunCounts::default(),
                 report: None,
             },
         );
@@ -407,6 +429,16 @@ impl Engine {
             },
             items_done: slot.done,
             items_total: slot.total,
+            elapsed_ms: millis(slot.started),
+            current: slot.current.as_ref().map(|c| CurrentItem {
+                index: c.index,
+                display_name: c.display_name.clone(),
+                catalog_id: c.catalog_id,
+                elapsed_ms: millis(c.started),
+                output: c.output.iter().cloned().collect(),
+            }),
+            recent: slot.recent.iter().cloned().collect(),
+            counts: slot.counts,
             report: slot.report.clone(),
         })
     }
@@ -636,15 +668,14 @@ impl Engine {
                 free_space: &*config.free_space,
                 settle: config.settle,
             },
-            |done| {
-                if let Some(slot) = self.state().runs.get_mut(&plan_id) {
-                    slot.done = done;
-                }
+            |event| {
+                let done = self.on_run_event(plan_id, event);
                 self.0.changed.notify_all();
-                if let Some(hook) = &config.after_item {
+                if let (Some(done), Some(hook)) = (done, &config.after_item) {
                     hook(done, stop);
                 }
             },
+            Some(self.output_sink(plan_id)),
         );
         let mut state = self.state();
         if let Some(slot) = state.runs.get_mut(&plan_id) {
@@ -653,6 +684,66 @@ impl Engine {
         state.running = None;
         drop(state);
         self.0.changed.notify_all();
+    }
+}
+
+impl Engine {
+    /// Records a run event in the run's slot. Returns the number of items
+    /// done after a finished item.
+    fn on_run_event(&self, plan_id: PlanId, event: RunEvent<'_>) -> Option<usize> {
+        let mut state = self.state();
+        let slot = state.runs.get_mut(&plan_id)?;
+        match event {
+            RunEvent::Started { index, entry } => {
+                slot.current = Some(Current {
+                    index,
+                    display_name: entry.display_name.clone(),
+                    catalog_id: entry.catalog_id,
+                    started: Instant::now(),
+                    output: VecDeque::new(),
+                });
+                None
+            }
+            RunEvent::Finished { index, item } => {
+                slot.current = None;
+                match item.outcome {
+                    Outcome::Removed | Outcome::Ran => slot.counts.removed += 1,
+                    Outcome::Skipped => slot.counts.skipped += 1,
+                    Outcome::Failed => slot.counts.failed += 1,
+                    Outcome::NotRun => {}
+                }
+                if item.outcome != Outcome::NotRun {
+                    slot.recent.push_back(item.clone());
+                    if slot.recent.len() > RECENT_ITEMS {
+                        slot.recent.pop_front();
+                    }
+                }
+                slot.done = index + 1;
+                Some(slot.done)
+            }
+        }
+    }
+
+    /// Keeps the last [`OUTPUT_LINES`] lines the current item's tool printed.
+    fn output_sink(&self, plan_id: PlanId) -> execute::OutputSink {
+        let engine = self.clone();
+        Arc::new(move |index, line| {
+            let mut state = engine.state();
+            let Some(current) = state
+                .runs
+                .get_mut(&plan_id)
+                .and_then(|slot| slot.current.as_mut())
+                .filter(|c| c.index == index)
+            else {
+                return;
+            };
+            current.output.push_back(line);
+            if current.output.len() > OUTPUT_LINES {
+                current.output.pop_front();
+            }
+            drop(state);
+            engine.0.changed.notify_all();
+        })
     }
 }
 

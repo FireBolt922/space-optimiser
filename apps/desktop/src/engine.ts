@@ -108,9 +108,13 @@ export interface ReportItem {
   catalog_id: string;
   display_name: string;
   outcome: "removed" | "ran" | "skipped" | "failed" | "not_run";
+  /** Why the item was skipped, as the engine's code (`tool_busy`, ...). */
+  reason: string | null;
   detail: string | null;
   bytes_removed: number;
   recovery_text: string | null;
+  /** What to do about a busy tool, for an item skipped as `tool_busy`. */
+  hint: string | null;
 }
 
 export interface FreeSpace {
@@ -131,11 +135,26 @@ export interface Report {
   memory_log: string[];
 }
 
+/** The item a run is working on now. */
+export interface CurrentItem {
+  index: number;
+  display_name: string;
+  catalog_id: string;
+  elapsed_ms: number;
+  /** The last lines its tool printed; the first names the command. Empty for deletes. */
+  output: string[];
+}
+
 export interface RunView {
   plan_id: number;
   status: "running" | "finished";
   items_done: number;
   items_total: number;
+  elapsed_ms: number;
+  current: CurrentItem | null;
+  /** The most recently finished items, newest last. */
+  recent: ReportItem[];
+  counts: { removed: number; skipped: number; failed: number };
   report: Report | null;
 }
 

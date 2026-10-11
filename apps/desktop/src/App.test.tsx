@@ -308,7 +308,45 @@ describe("running and report", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     await waitFor(() => expect(engine.stopRun).toHaveBeenCalledWith(11));
     // Progress arrives from the next poll, after the click, and must survive it.
-    expect(await screen.findByText("1 of 2 items done")).toBeTruthy();
+    expect(await screen.findByText(/^1 of 2 items done/)).toBeTruthy();
+  });
+});
+
+describe("live cleaning progress", () => {
+  it("shows the item in progress, its tool output, and finished items with a hint", async () => {
+    await toReview(fakeEngine({ runStays: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    const status = await screen.findByRole("status");
+    await waitFor(() => expect(status.textContent).toBe("Cleaning ~/.cache/uv."));
+    expect(screen.getByText("1 of 2 items done · 1 minute 2 seconds")).toBeTruthy();
+    expect(screen.getByText("Running for 41 seconds")).toBeTruthy();
+    const output = screen.getByLabelText("Output from ~/.cache/uv");
+    expect(output.textContent).toBe(
+      "Running /opt/homebrew/bin/uv cache clean\nClearing cache at: /Users/test/.cache/uv",
+    );
+    expect(output.getAttribute("tabindex")).toBe("0");
+    const finished = screen.getByRole("list", { name: "Finished items" });
+    expect(within(finished).getByText("~/.npm")).toBeTruthy();
+    expect(within(finished).getByText(/Skipped: the tool is busy/)).toBeTruthy();
+    expect(within(finished).getByText(/Let it finish or close it/)).toBeTruthy();
+    expect(screen.getByText("0 removed, 1 skipped, 0 failed")).toBeTruthy();
+  });
+
+  it("the report repeats a busy tool's hint", async () => {
+    const busy = {
+      ...REPORT.items[1],
+      candidate_id: 9,
+      catalog_id: "pkg-uv-cache",
+      display_name: "~/.cache/uv",
+      reason: "tool_busy",
+      detail: "the tool is busy with another process. Try again later",
+      hint: "Another uv program is using the cache. Close them, then run the cleanup again.",
+    };
+    await toReview(fakeEngine({ report: { ...REPORT, items: [REPORT.items[0], busy] } }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await screen.findByRole("heading", { name: "Report" });
+    const skipped = screen.getByRole("region", { name: "Skipped" });
+    expect(within(skipped).getByText(/Another uv program is using the cache/)).toBeTruthy();
   });
 });
 
@@ -389,9 +427,11 @@ describe("deep scan", () => {
           catalog_id: "pkg-pnpm-store",
           display_name: "~/Library/pnpm/store/v3",
           outcome: "ran" as const,
+          reason: null,
           detail: null,
           bytes_removed: 0,
           recovery_text: "The next install will download packages again.",
+          hint: null,
         },
       ],
     };

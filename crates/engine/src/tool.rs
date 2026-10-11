@@ -216,6 +216,10 @@ pub(crate) struct Output {
     pub stderr: String,
 }
 
+/// Receives each line a tool prints, cleaned by [`clean_line`], while the
+/// tool runs. Called from the pipe reader threads.
+pub(crate) type LineSink = Arc<dyn Fn(String) + Send + Sync>;
+
 /// Runs `tool` with exactly `args`. `stop_on` lists output that means the
 /// tool is waiting on something it should not (a lock, a download); the
 /// tool is stopped as soon as one appears.
@@ -225,6 +229,18 @@ pub(crate) fn run(
     args: &[&str],
     timeout: Duration,
     stop_on: &'static [&'static str],
+) -> io::Result<Output> {
+    run_with_lines(ctx, tool, args, timeout, stop_on, None)
+}
+
+/// [`run`], also sending each printed line to `lines` as it arrives.
+pub(crate) fn run_with_lines(
+    ctx: &Context,
+    tool: &Tool,
+    args: &[&str],
+    timeout: Duration,
+    stop_on: &'static [&'static str],
+    lines: Option<LineSink>,
 ) -> io::Result<Output> {
     let work = empty_work_dir(ctx)?;
     let mut command = command(&tool.path);
@@ -239,8 +255,20 @@ pub(crate) fn run(
     let mut group = sys::Group::spawn(&mut command)?;
 
     let stopped: Arc<Mutex<Option<&'static str>>> = Arc::default();
-    let stdout = reader(group.child().stdout.take(), STDOUT_LIMIT, stop_on, &stopped);
-    let stderr = reader(group.child().stderr.take(), STDOUT_LIMIT, stop_on, &stopped);
+    let stdout = reader(
+        group.child().stdout.take(),
+        STDOUT_LIMIT,
+        stop_on,
+        &stopped,
+        lines.clone(),
+    );
+    let stderr = reader(
+        group.child().stderr.take(),
+        STDOUT_LIMIT,
+        stop_on,
+        &stopped,
+        lines,
+    );
 
     let deadline = Instant::now() + timeout;
     let exit = loop {
@@ -345,13 +373,14 @@ fn empty_work_dir(ctx: &Context) -> io::Result<PathBuf> {
 
 type Stream = (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>);
 
-/// Reads a pipe on its own thread, keeping at most `limit` bytes, and flags
-/// the first `stop_on` pattern it sees.
+/// Reads a pipe on its own thread, keeping at most `limit` bytes, flags
+/// the first `stop_on` pattern it sees, and sends each line to `lines`.
 fn reader(
     pipe: Option<impl Read + Send + 'static>,
     limit: usize,
     stop_on: &'static [&'static str],
     stopped: &Arc<Mutex<Option<&'static str>>>,
+    lines: Option<LineSink>,
 ) -> Stream {
     let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
     let (tx, rx) = mpsc::channel();
@@ -364,9 +393,13 @@ fn reader(
     thread::spawn(move || {
         let mut chunk = [0u8; 8192];
         let mut seen = String::new();
+        let mut partial: Vec<u8> = Vec::new();
         while let Ok(n) = pipe.read(&mut chunk) {
             if n == 0 {
                 break;
+            }
+            if let Some(lines) = &lines {
+                send_lines(&mut partial, &chunk[..n], lines);
             }
             {
                 let mut kept = shared.lock().unwrap_or_else(PoisonError::into_inner);
@@ -395,9 +428,83 @@ fn reader(
                 }
             }
         }
+        if let Some(lines) = &lines
+            && let Some(line) = clean_line(&String::from_utf8_lossy(&partial))
+        {
+            lines(line);
+        }
         let _ = tx.send(());
     });
     (buffer, rx)
+}
+
+/// The longest line passed to a [`LineSink`], in characters.
+const LINE_LIMIT: usize = 300;
+
+/// Adds `bytes` to `partial` and sends every complete line. A carriage
+/// return ends a line too, so a progress counter shows its latest value.
+fn send_lines(partial: &mut Vec<u8>, bytes: &[u8], lines: &LineSink) {
+    for &byte in bytes {
+        if byte == b'\n' || byte == b'\r' {
+            if let Some(line) = clean_line(&String::from_utf8_lossy(partial)) {
+                lines(line);
+            }
+            partial.clear();
+        } else if partial.len() < LINE_LIMIT * 4 {
+            partial.push(byte);
+        }
+    }
+}
+
+/// A printed line made safe to show: terminal escape sequences and other
+/// control characters removed, tabs as spaces, trimmed, and cut to
+/// [`LINE_LIMIT`] characters. None for a line with nothing left.
+pub(crate) fn clean_line(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len().min(LINE_LIMIT));
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.peek() {
+                // CSI: ESC [ parameters, then one final byte in @..~.
+                Some('[') => {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: ESC ] text, ended by BEL or ESC \.
+                Some(']') => {
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if c == '\u{1b}' {
+                            chars.next_if_eq(&'\\');
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    chars.next();
+                }
+            },
+            '\t' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut line: String = trimmed.chars().take(LINE_LIMIT).collect();
+    if trimmed.chars().count() > LINE_LIMIT {
+        line.push('…');
+    }
+    Some(line)
 }
 
 /// The text a reader kept, once its pipe closed or [`DRAIN_WAIT`] passed.
@@ -960,6 +1067,65 @@ mod tests {
     }
 
     #[test]
+    fn each_printed_line_reaches_the_sink_while_the_tool_runs() {
+        let fake = Fake::new();
+        fake.tool(
+            "uv",
+            r"printf 'Clearing cache at: /x\n'; printf 'Removed 3 files\r'; printf '\033[1mdone\033[0m\n' >&2; printf 'no newline'",
+        );
+        let ctx = fake.ctx();
+        let tool = find(&ctx, "uv").unwrap();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink: LineSink = {
+            let seen = seen.clone();
+            Arc::new(move |line| seen.lock().unwrap().push(line))
+        };
+        let out = run_with_lines(&ctx, &tool, &[], QUERY_TIMEOUT, &[], Some(sink)).unwrap();
+        assert_eq!(out.exit, Exit::Success);
+        let mut lines = seen.lock().unwrap().clone();
+        lines.sort();
+        assert_eq!(
+            lines,
+            [
+                "Clearing cache at: /x",
+                "Removed 3 files",
+                "done",
+                "no newline"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stop_line_still_stops_the_tool_when_lines_are_sent() {
+        let fake = Fake::new();
+        fake.tool(
+            "uv",
+            "echo 'Cache is currently in-use, waiting for other uv processes' >&2; sleep 30",
+        );
+        let ctx = fake.ctx();
+        let tool = find(&ctx, "uv").unwrap();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink: LineSink = {
+            let seen = seen.clone();
+            Arc::new(move |line| seen.lock().unwrap().push(line))
+        };
+        let out = run_with_lines(
+            &ctx,
+            &tool,
+            &[],
+            Duration::from_secs(20),
+            &["in-use"],
+            Some(sink),
+        )
+        .unwrap();
+        assert_eq!(out.exit, Exit::Stopped("in-use"));
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["Cache is currently in-use, waiting for other uv processes"]
+        );
+    }
+
+    #[test]
     fn a_tool_that_prints_a_stop_line_is_stopped_at_once() {
         let fake = Fake::new();
         fake.tool(
@@ -1063,5 +1229,36 @@ mod windows_tests {
         let out = run(&ctx, &tool, &args, Duration::from_secs(2), &[]).unwrap();
         assert_eq!(out.exit, Exit::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(20));
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::{LINE_LIMIT, clean_line};
+
+    #[test]
+    fn colour_and_title_sequences_are_removed() {
+        assert_eq!(clean_line("\u{1b}[1;32mok\u{1b}[0m").as_deref(), Some("ok"));
+        assert_eq!(
+            clean_line("\u{1b}]0;window title\u{7}rest").as_deref(),
+            Some("rest")
+        );
+        assert_eq!(
+            clean_line("\u{1b}]8;;http://x\u{1b}\\link").as_deref(),
+            Some("link")
+        );
+    }
+
+    #[test]
+    fn control_characters_go_and_tabs_become_spaces() {
+        assert_eq!(clean_line("a\u{0}b\u{7}c\td").as_deref(), Some("abc d"));
+        assert_eq!(clean_line("  \u{1b}[0m \t ").as_deref(), None);
+    }
+
+    #[test]
+    fn a_long_line_is_cut() {
+        let line = clean_line(&"é".repeat(1000)).unwrap();
+        assert_eq!(line.chars().count(), LINE_LIMIT + 1);
+        assert!(line.ends_with('…'));
     }
 }
