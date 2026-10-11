@@ -679,6 +679,13 @@ impl Context {
         self
     }
 
+    /// How long a long read-only query (Docker's detailed report) may take.
+    #[doc(hidden)]
+    pub fn with_detail_timeout(mut self, timeout: Duration) -> Self {
+        self.tools.detail_timeout = timeout;
+        self
+    }
+
     /// A variable passed to tools unchanged (`DOCKER_HOST`, `DOCKER_CONTEXT`).
     #[doc(hidden)]
     pub fn with_tool_env(mut self, key: &str, value: impl Into<std::ffi::OsString>) -> Self {

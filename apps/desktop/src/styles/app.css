@@ -680,3 +680,28 @@ details.card summary,
 .progress::-moz-progress-bar {
   background: var(--primary);
 }
+
+/* Developer assets: plain tables, information only. */
+.assets-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.assets-table th,
+.assets-table td {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.assets-table thead th {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.assets-table tbody th {
+  font-weight: 600;
+}

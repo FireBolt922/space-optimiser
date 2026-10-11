@@ -299,6 +299,66 @@ pub struct Note {
     pub bytes: Option<u64>,
 }
 
+/// Information-only findings for developers (v0.3). None of it has a
+/// candidate id, so nothing here can be planned, revealed, or removed.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DevAssets {
+    /// Present when Docker answered locally or its disk file exists.
+    pub docker: Option<DockerAssets>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DockerAssets {
+    pub images: Vec<DockerImage>,
+    pub containers: Vec<DockerContainer>,
+    pub volumes: Vec<DockerVolume>,
+    pub disk_file: Option<DiskFile>,
+    /// Why the lists are empty or missing, in words.
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerImage {
+    pub repository: String,
+    pub tag: String,
+    pub size_bytes: Option<u64>,
+    /// Space only this image uses (not shared with other images).
+    pub unique_bytes: Option<u64>,
+    /// Containers created from it, running or not.
+    pub containers: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerContainer {
+    pub name: String,
+    pub image: String,
+    /// `running`, `exited`, ...
+    pub state: String,
+    /// Docker's words, such as "Up 25 minutes".
+    pub status: String,
+    /// The container's own writable layer.
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerVolume {
+    pub name: String,
+    pub size_bytes: Option<u64>,
+    /// Containers that use it, running or not.
+    pub in_use_by: Option<u64>,
+}
+
+/// Docker Desktop's virtual disk, measured with one `stat`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiskFile {
+    /// Where it is, relative to the home ("~/Library/...").
+    pub location_label: String,
+    /// Space it takes on disk.
+    pub allocated_bytes: u64,
+    /// The size it reports; can be far larger (a sparse file).
+    pub logical_bytes: u64,
+}
+
 /// What `get_scan` returns. Candidates arrive when the scan finishes.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanView {
@@ -314,6 +374,8 @@ pub struct ScanView {
     pub skipped: Vec<SkippedView>,
     pub roots: Vec<RootView>,
     pub notes: Vec<Note>,
+    /// Deep Scan only: information for developers, never offered.
+    pub dev_assets: Option<DevAssets>,
 }
 
 #[derive(Debug, Clone, Serialize)]

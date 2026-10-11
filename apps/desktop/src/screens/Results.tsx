@@ -11,6 +11,7 @@ import { formatAge, formatBytes, formatDuration, plural, riskWord } from "../for
 import { SKIP_REASONS } from "../skipReasons";
 import { TEMP_SOURCES, tempSource } from "../tempSources";
 import { FolderIcon } from "../icons";
+import { DevAssetsSection } from "../components/DevAssetsSection";
 
 interface Props {
   scan: ScanView;
@@ -107,7 +108,8 @@ export function Results({
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
   const [revealErrors, setRevealErrors] = useState<Record<number, string>>({});
-  const [category, setCategory] = useState<CategoryId | "all">("all");
+  // "assets" shows only the information-only Developer assets section.
+  const [category, setCategory] = useState<CategoryId | "all" | "assets">("all");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const reveal = async (id: number) => {
@@ -337,7 +339,7 @@ export function Results({
               />
             </label>
           </div>
-          {categories.length > 1 && (
+          {(categories.length > 1 || scan.dev_assets) && (
             <div className="chips" role="group" aria-label="Categories">
               <button
                 type="button"
@@ -359,6 +361,16 @@ export function Results({
                   {cat.bytes > 0 && `, ${formatBytes(cat.bytes)}`})
                 </button>
               ))}
+              {scan.dev_assets && (
+                <button
+                  type="button"
+                  className="chip"
+                  aria-pressed={category === "assets"}
+                  onClick={() => setCategory("assets")}
+                >
+                  Developer assets
+                </button>
+              )}
             </div>
           )}
           {quitFirst && (
@@ -377,7 +389,9 @@ export function Results({
               Your temporary folder is in memory: cleaning it frees memory, not disk.
             </p>
           )}
-          {shown.length === 0 && <p className="body">No items match this filter.</p>}
+          {shown.length === 0 && category !== "assets" && (
+            <p className="body">No items match this filter.</p>
+          )}
           {shown.map(({ label, rows, notes }) => (
             <section key={label} className="card group" aria-label={label}>
               <div className="group-head">
@@ -401,6 +415,14 @@ export function Results({
             </section>
           ))}
         </>
+      )}
+
+      {scan.dev_assets && (category === "all" || category === "assets") && (
+        <DevAssetsSection
+          assets={scan.dev_assets}
+          candidates={scan.candidates}
+          notes={scan.notes}
+        />
       )}
 
       {(scan.skipped.length > 0 || scan.roots.some((r) => r.skipped)) && (

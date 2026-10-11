@@ -16,8 +16,8 @@ use serde::Serialize;
 use crate::docker;
 use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{
-    Action, Candidate, CandidateId, Confidence, EntryKind, Label, Note, Platform, ScanMode, Scope,
-    ToolAction,
+    Action, Candidate, CandidateId, Confidence, DevAssets, DockerAssets, EntryKind, Label, Note,
+    Platform, ScanMode, Scope, ToolAction,
 };
 pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
@@ -295,6 +295,8 @@ pub struct Scan {
     pub cache_skipped: Vec<Skipped>,
     /// What rows found that is not a candidate.
     pub notes: Vec<Note>,
+    /// Deep Scan only: information for developers, never offered.
+    pub dev_assets: Option<DevAssets>,
     pub progress: Progress,
 }
 
@@ -339,6 +341,7 @@ pub fn scan(
         caches: Vec::new(),
         cache_skipped: Vec::new(),
         notes: Vec::new(),
+        dev_assets: None,
         progress: walk.progress,
     };
     let mut seen = HashSet::new();
@@ -384,7 +387,8 @@ pub fn scan(
         }
         walk.check_cancel()?;
         walk.stage(Stage::Docker, None);
-        walk.docker(&mut out);
+        let docker = walk.docker(&mut out)?;
+        out.dev_assets = Some(DevAssets { docker });
         walk.stage(Stage::LargeFiles, None);
         walk.large_files(&mut out)?;
     }
@@ -817,14 +821,22 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
 
     /// `docker-build-cache`: one candidate for the build cache Docker
     /// reports, or one note saying why not.
-    fn docker(&mut self, out: &mut Scan) {
+    /// `docker-build-cache`, then the information-only Docker assets: the
+    /// lists from `docker system df -v` when the build-cache checks passed,
+    /// and Docker Desktop's disk file when it exists.
+    fn docker(&mut self, out: &mut Scan) -> std::result::Result<Option<DockerAssets>, ScanError> {
         let row = CatalogId::DockerBuildCache;
+        let disk_file = docker::disk_file(self.ctx);
+        let mut assets = disk_file.map(|disk| DockerAssets {
+            disk_file: Some(disk),
+            ..DockerAssets::default()
+        });
         let tool = match tool::find(self.ctx, "docker") {
             Ok(tool) => tool,
-            Err(NotFound::Missing) => return,
+            Err(NotFound::Missing) => return Ok(assets),
             Err(reason) => {
                 note(out, row, format!("docker: {reason}."), None);
-                return;
+                return Ok(assets);
             }
         };
         match docker::status(self.ctx, &tool) {
@@ -836,38 +848,55 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                 if let Some(bytes) = volumes.filter(|b| *b > 0) {
                     note(out, row, VOLUMES.to_owned(), Some(bytes));
                 }
-                if reclaimable == 0 {
-                    return;
+                self.build_cache(out, reclaimable, &tool);
+                let found = assets.get_or_insert_with(DockerAssets::default);
+                match docker::details(self.ctx, &tool, self.cancel) {
+                    docker::Details::Listed(lists) => {
+                        found.images = lists.images;
+                        found.containers = lists.containers;
+                        found.volumes = lists.volumes;
+                    }
+                    docker::Details::Note(text) => found.note = Some(text.to_owned()),
+                    docker::Details::Cancelled => return Err(ScanError::Cancelled),
                 }
-                let home = self.ctx.home();
-                let Ok(home_id) = measure::file_id(home) else {
-                    return;
-                };
-                let target = Target {
-                    root: None,
-                    path: home,
-                    file_id: home_id,
-                    scope: Scope::Tool,
-                };
-                let found_by = format!(
-                    "Size from `docker system df`; docker {}.",
-                    tool.found_text(home)
-                );
-                let mut candidate = self.candidate(
-                    row,
-                    target,
-                    "Docker build cache".to_owned(),
-                    Summary::empty(true),
-                );
-                candidate.upper_bound_bytes = Some(reclaimable);
-                candidate.found_by = Some(found_by);
-                candidate.tool = Some(ToolAction {
-                    tool,
-                    args: docker::PRUNE,
-                });
-                out.caches.push(candidate);
             }
         }
+        Ok(assets)
+    }
+
+    /// The build-cache candidate, with Docker's reclaimable number.
+    fn build_cache(&mut self, out: &mut Scan, reclaimable: u64, tool: &Tool) {
+        let row = CatalogId::DockerBuildCache;
+        if reclaimable == 0 {
+            return;
+        }
+        let home = self.ctx.home();
+        let Ok(home_id) = measure::file_id(home) else {
+            return;
+        };
+        let target = Target {
+            root: None,
+            path: home,
+            file_id: home_id,
+            scope: Scope::Tool,
+        };
+        let found_by = format!(
+            "Size from `docker system df`; docker {}.",
+            tool.found_text(home)
+        );
+        let mut candidate = self.candidate(
+            row,
+            target,
+            "Docker build cache".to_owned(),
+            Summary::empty(true),
+        );
+        candidate.upper_bound_bytes = Some(reclaimable);
+        candidate.found_by = Some(found_by);
+        candidate.tool = Some(ToolAction {
+            tool: tool.clone(),
+            args: docker::PRUNE,
+        });
+        out.caches.push(candidate);
     }
 
     /// `large-files-report` (phase 6 item 9): the largest files in the

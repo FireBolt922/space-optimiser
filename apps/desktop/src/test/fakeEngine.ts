@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type {
   AppInfo,
   Candidate,
+  DevAssets,
   Engine,
   EngineError,
   ExecuteStart,
@@ -138,9 +139,62 @@ export const DEEP_CANDIDATES: Candidate[] = [
   }),
 ];
 
+export const DEV_ASSETS: DevAssets = {
+  docker: {
+    images: [
+      {
+        repository: "example/worker",
+        tag: "check",
+        size_bytes: 955_000_000,
+        unique_bytes: 795_800_000,
+        containers: 0,
+      },
+      {
+        repository: "example/backend",
+        tag: "latest",
+        size_bytes: 1_400_000_000,
+        unique_bytes: 1_291_000_000,
+        containers: 1,
+      },
+      {
+        repository: "<none>",
+        tag: "<none>",
+        size_bytes: 754_000_000,
+        unique_bytes: 753_800_000,
+        containers: 0,
+      },
+    ],
+    containers: [
+      {
+        name: "example-backend-1",
+        image: "example/backend:latest",
+        state: "running",
+        status: "Up 25 minutes",
+        size_bytes: 57_300,
+      },
+    ],
+    volumes: [
+      { name: "example_db", size_bytes: 14_200_000_000, in_use_by: 1 },
+      { name: "example_cache", size_bytes: 482_000_000, in_use_by: 0 },
+      {
+        name: "dc487f67a8810ad2570e670787bbda542c3fdd4fce4ddfd02c57293ef3ba59cf",
+        size_bytes: 0,
+        in_use_by: 0,
+      },
+    ],
+    disk_file: {
+      location_label: "~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+      allocated_bytes: 30_600_000_000,
+      logical_bytes: 1_099_511_627_776,
+    },
+    note: null,
+  },
+};
+
 export function deepScan(): ScanView {
   return finishedScan({
     candidates: DEEP_CANDIDATES,
+    dev_assets: DEV_ASSETS,
     notes: [
       {
         catalog_id: "docker-build-cache",
@@ -172,6 +226,7 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
     ],
     roots: [{ location_label: "Temporary files", skipped: null, frees_memory: false }],
     notes: [],
+    dev_assets: null,
     ...over,
   };
 }

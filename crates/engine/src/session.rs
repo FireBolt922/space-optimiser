@@ -235,6 +235,7 @@ impl Engine {
                 skipped: Vec::new(),
                 roots: Vec::new(),
                 notes: Vec::new(),
+                dev_assets: None,
             },
         });
         drop(state);
@@ -771,6 +772,7 @@ fn scan_slot(state: &State, scan_id: ScanId) -> Result<&ScanSlot> {
 
 fn fill(view: &mut ScanView, scan: Scan) {
     view.progress = scan.progress;
+    view.dev_assets = scan.dev_assets;
     let label = CatalogId::UserTemp.location_label();
     for root in scan.temp {
         match root {

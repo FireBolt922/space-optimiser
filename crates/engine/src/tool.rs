@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::discover::CancelToken;
 use crate::measure::{self, FileId};
 use crate::platform::RevealCommand;
 use crate::policy::Context;
@@ -24,6 +25,8 @@ use crate::policy::Context;
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Clean commands (phase 8 item 4).
 pub const ACTION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Read-only queries that list a lot, such as `docker system df -v`.
+pub const DETAIL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How much of each output stream is kept.
 const STDOUT_LIMIT: usize = 1024 * 1024;
@@ -46,6 +49,9 @@ pub(crate) struct ToolEnv {
     pub work_dir: Option<PathBuf>,
     pub query_timeout: Duration,
     pub action_timeout: Duration,
+    /// For a read-only query that can take long, such as Docker's detailed
+    /// disk report. The scan's cancel still stops it at once.
+    pub detail_timeout: Duration,
     /// Passed through unchanged (`DOCKER_HOST`, `DOCKER_CONTEXT`).
     pub pass_env: Vec<(OsString, OsString)>,
 }
@@ -58,6 +64,7 @@ impl Default for ToolEnv {
             work_dir: None,
             query_timeout: QUERY_TIMEOUT,
             action_timeout: ACTION_TIMEOUT,
+            detail_timeout: DETAIL_TIMEOUT,
             pass_env: Vec::new(),
         }
     }
@@ -206,6 +213,8 @@ pub(crate) enum Exit {
     TimedOut,
     /// The tool printed one of the `stop_on` lines and was stopped.
     Stopped(&'static str),
+    /// The caller's cancel token was set; the tool was stopped.
+    Cancelled,
 }
 
 #[derive(Debug)]
@@ -230,7 +239,7 @@ pub(crate) fn run(
     timeout: Duration,
     stop_on: &'static [&'static str],
 ) -> io::Result<Output> {
-    run_with_lines(ctx, tool, args, timeout, stop_on, None)
+    run_with_lines(ctx, tool, args, timeout, stop_on, None, None)
 }
 
 /// [`run`], also sending each printed line to `lines` as it arrives.
@@ -241,6 +250,7 @@ pub(crate) fn run_with_lines(
     timeout: Duration,
     stop_on: &'static [&'static str],
     lines: Option<LineSink>,
+    cancel: Option<&CancelToken>,
 ) -> io::Result<Output> {
     let work = empty_work_dir(ctx)?;
     let mut command = command(&tool.path);
@@ -286,6 +296,9 @@ pub(crate) fn run_with_lines(
         }
         if Instant::now() >= deadline {
             break Exit::TimedOut;
+        }
+        if cancel.is_some_and(CancelToken::is_cancelled) {
+            break Exit::Cancelled;
         }
         thread::sleep(POLL);
     };
@@ -1080,7 +1093,7 @@ mod tests {
             let seen = seen.clone();
             Arc::new(move |line| seen.lock().unwrap().push(line))
         };
-        let out = run_with_lines(&ctx, &tool, &[], QUERY_TIMEOUT, &[], Some(sink)).unwrap();
+        let out = run_with_lines(&ctx, &tool, &[], QUERY_TIMEOUT, &[], Some(sink), None).unwrap();
         assert_eq!(out.exit, Exit::Success);
         let mut lines = seen.lock().unwrap().clone();
         lines.sort();
@@ -1116,6 +1129,7 @@ mod tests {
             Duration::from_secs(20),
             &["in-use"],
             Some(sink),
+            None,
         )
         .unwrap();
         assert_eq!(out.exit, Exit::Stopped("in-use"));

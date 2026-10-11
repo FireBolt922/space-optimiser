@@ -25,6 +25,12 @@ minor version can change behaviour.
   uv it runs), each finished item with its outcome, and counts. A tool that
   is busy because another process holds its cache says what to close.
 
+- Deep Scan adds an information-only "Developer assets" section: Docker
+  volumes (with how many containers use each), images, containers, the size
+  of Docker Desktop's disk file, and a table of the developer tool caches
+  the scan looked at with whether each was offered. Nothing in it can be
+  selected or removed.
+
 ### Changed
 
 - Scan again reruns the same scan mode instead of returning to the start

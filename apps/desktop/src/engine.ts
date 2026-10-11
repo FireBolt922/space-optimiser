@@ -60,6 +60,41 @@ export interface Note {
 /** A part of a scan, in the order the engine runs them. */
 export type ScanStage = "temp" | "caches" | "logs" | "tools" | "docker" | "large_files";
 
+export interface DockerImage {
+  repository: string;
+  tag: string;
+  size_bytes: number | null;
+  /** Space only this image uses. */
+  unique_bytes: number | null;
+  containers: number | null;
+}
+
+export interface DockerContainer {
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  size_bytes: number | null;
+}
+
+export interface DockerVolume {
+  name: string;
+  size_bytes: number | null;
+  /** Containers that use it, running or not. */
+  in_use_by: number | null;
+}
+
+/** Information only: nothing here has an id, so nothing can be selected. */
+export interface DevAssets {
+  docker: {
+    images: DockerImage[];
+    containers: DockerContainer[];
+    volumes: DockerVolume[];
+    disk_file: { location_label: string; allocated_bytes: number; logical_bytes: number } | null;
+    note: string | null;
+  } | null;
+}
+
 export interface ScanView {
   scan_id: number;
   status: "running" | "finished" | "cancelled" | "failed";
@@ -78,6 +113,8 @@ export interface ScanView {
   skipped: SkippedView[];
   roots: RootView[];
   notes: Note[];
+  /** Deep Scan only. */
+  dev_assets: DevAssets | null;
 }
 
 export interface PlanItem {

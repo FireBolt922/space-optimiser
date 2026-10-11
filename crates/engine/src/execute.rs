@@ -365,11 +365,12 @@ fn run_tool(
             args.join(" ")
         ));
     }
-    match tool::run_with_lines(ctx, &action.tool, args, timeout, stop_on, lines) {
+    match tool::run_with_lines(ctx, &action.tool, args, timeout, stop_on, lines, None) {
         Ok(out) => match out.exit {
             Exit::Success => Done::ran(),
             Exit::Stopped(_) => Done::skipped(SkipCause::ToolBusy),
-            Exit::TimedOut => Done::failed(
+            // The executor passes no cancel token; Stop waits for the item.
+            Exit::TimedOut | Exit::Cancelled => Done::failed(
                 format!(
                     "{} did not finish in time and was stopped",
                     action.tool.name

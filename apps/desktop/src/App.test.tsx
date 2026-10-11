@@ -350,6 +350,74 @@ describe("live cleaning progress", () => {
   });
 });
 
+describe("developer assets", () => {
+  async function toDeep() {
+    render(<App engine={fakeEngine({ scan: deepScan() })} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    await screen.findByRole("heading", { name: "Results" });
+  }
+
+  it("lists Docker volumes, images, containers, and the disk file for information only", async () => {
+    await toDeep();
+    const assets = screen.getByRole("region", { name: "Developer assets" });
+    expect(within(assets).getByText(/Information only/)).toBeTruthy();
+    expect(within(assets).queryAllByRole("checkbox")).toEqual([]);
+    expect(within(assets).queryByRole("button", { name: /Show in folder/ })).toBeNull();
+
+    const volumes = within(assets).getByRole("table", { name: "Docker volumes" });
+    const volumeRows = within(volumes)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.textContent);
+    expect(volumeRows).toEqual([
+      "example_db14.2 GB1 container",
+      "example_cache482 MBNot used by a container right now",
+      "Unnamed volume (dc487f67a881)0 bytesNot used by a container right now",
+    ]);
+    expect(within(assets).getByText(/Space Optimiser never removes them/)).toBeTruthy();
+
+    const images = within(assets).getByRole("table", { name: "Docker images" });
+    const first = within(images).getAllByRole("row")[1];
+    expect(first.textContent).toBe("example/backend:latest1.4 GB1.3 GB1");
+    expect(within(images).getByText("Untagged image")).toBeTruthy();
+
+    const containers = within(assets).getByRole("table", { name: "Docker containers" });
+    expect(within(containers).getByText("example-backend-1")).toBeTruthy();
+    expect(within(containers).getByText("Running (Up 25 minutes)")).toBeTruthy();
+
+    expect(within(assets).getByText(/uses 30.6 GB on disk/)).toBeTruthy();
+    expect(within(assets).getByText(/never deletes it/)).toBeTruthy();
+  });
+
+  it("the tool cache table says which caches are offered and why others are not", async () => {
+    await toDeep();
+    const assets = screen.getByRole("region", { name: "Developer assets" });
+    const table = within(assets).getByRole("table", { name: "Developer tool caches" });
+    const rows = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.textContent);
+    expect(rows).toContain("pnpm store~/Library/pnpm/store/v3Up to 3.0 MBOffered");
+    expect(rows).toContain("pip cache~/Library/Caches/pipUp to 1.0 MBNot offered: not sure");
+    expect(rows).toContain("Docker build cacheDocker did not respond.");
+  });
+
+  it("the chip shows only the assets and selection totals ignore them", async () => {
+    await toDeep();
+    const categories = within(screen.getByRole("group", { name: "Categories" }));
+    fireEvent.click(categories.getByRole("button", { name: "Developer assets" }));
+    expect(screen.getByRole("region", { name: "Developer assets" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Temporary files" })).toBeNull();
+    expect(screen.getByText(/0 items selected, about 0 bytes/)).toBeTruthy();
+  });
+
+  it("a normal scan has no Developer assets", async () => {
+    await toResults();
+    expect(screen.queryByRole("region", { name: "Developer assets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Developer assets" })).toBeNull();
+  });
+});
+
 // Phase 7 test 10.
 describe("deep scan", () => {
   async function toDeepResults(engine = fakeEngine({ scan: deepScan() })) {
