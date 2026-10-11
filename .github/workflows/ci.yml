@@ -1,12 +1,18 @@
 name: CI
 
-# Runs only when commits land on main (a direct push or a merged pull request).
+# Runs on every pull request and on every commit that lands on main. The
+# Release workflow refuses a commit without a green CI run.
 on:
+  pull_request:
   push:
     branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -17,7 +23,7 @@ jobs:
         os: [macos-latest, ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Version comes from rust-toolchain.toml. The compile-fail test output
       # depends on the compiler version, so CI and local builds must match.
@@ -33,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -48,30 +54,9 @@ jobs:
           npm test
           npm run build
 
-      # tests/hygiene.rs names these calls in order to forbid them.
       - name: Delete calls only in the executor, processes only in the tool runner
         shell: bash
-        run: |
-          if grep -rnE --exclude=hygiene.rs 'remove_file|remove_dir' crates apps/desktop/src-tauri/src; then
-            echo "std::fs::remove_* is not allowed. Deletes go through the executor." >&2
-            exit 1
-          fi
-          if grep -rlE --include='*.rs' --exclude=hygiene.rs 'Command::new' crates apps/desktop/src-tauri/src | grep -vx 'crates/engine/src/tool.rs'; then
-            echo "Processes start only in crates/engine/src/tool.rs." >&2
-            exit 1
-          fi
-          if grep -rnE --include='*.rs' --exclude=hygiene.rs 'DeleteFileW|RemoveDirectoryW|SHFileOperation|IFileOperation|MOVEFILE_DELAY_UNTIL_REBOOT|MoveFileEx|FILE_FLAG_DELETE_ON_CLOSE|FILE_DELETE_ON_CLOSE|NtSetInformationFile|libc::unlink|libc::rmdir' crates apps/desktop/src-tauri/src; then
-            echo "Path-based Windows deletes are not allowed. Deletes go through the executor." >&2
-            exit 1
-          fi
-          if grep -rlE --include='*.rs' --exclude=hygiene.rs 'CreateProcessW|ShellExecute' crates apps/desktop/src-tauri/src; then
-            echo "Processes start only in crates/engine/src/tool.rs." >&2
-            exit 1
-          fi
-          if grep -rlE --include='*.rs' --exclude=hygiene.rs 'unlinkat|REMOVEDIR|FileDispositionInfo|FILE_DISPOSITION_FLAG_DELETE' crates apps/desktop/src-tauri/src | grep -vxE 'crates/engine/src/execute.rs|crates/engine/src/execute/[^/]+\.rs'; then
-            echo "Handle-relative deletes are allowed only in the executor (crates/engine/src/execute.rs and crates/engine/src/execute/)." >&2
-            exit 1
-          fi
+        run: scripts/hygiene.sh
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -80,7 +65,26 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked 2>&1 | tee test-output.log
+
+      # The log of a failed step is visible only to signed-in users; the
+      # run summary is public, so the failing tests are copied there.
+      - name: Failing tests in the run summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Failing tests on ${{ matrix.os }}"
+            echo
+            echo '```text'
+            grep -E 'FAILED|panicked at|^failures:|^---- ' test-output.log | head -n 60 || true
+            echo
+            awk '/^failures:$/{flag=1} flag' test-output.log | head -n 200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Creates 1,000,000 empty files, so it is ignored by default and run
       # only on Linux.
@@ -88,3 +92,115 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 30
         run: cargo test -p space-optimiser-engine --test large_cancel --locked -- --ignored --test-threads=1
+
+  tooling:
+    name: formatting and commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install repository tooling
+        run: npm ci --ignore-scripts
+
+      - name: Prettier
+        run: npx prettier --check .
+
+      # PRs are squash-merged, so the PR title becomes the commit on main.
+      - name: PR title is a Conventional Commit
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$TITLE" | npx commitlint
+
+      - name: Commits on main are Conventional Commits
+        if: github.event_name == 'push'
+        run: npx commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}"
+
+  dependencies:
+    name: dependency licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: npm audit (desktop, production dependencies)
+        working-directory: apps/desktop
+        run: npm audit --omit=dev --audit-level=high
+
+  coverage:
+    name: test coverage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add llvm-tools-preview
+
+      - name: Install WebKitGTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: UI coverage
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci
+          npm run test:coverage 2>&1 | tee ui-coverage.txt
+          npm run build
+
+      - name: Engine coverage
+        run: |
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/engine.lcov
+          cargo llvm-cov report --summary-only | tee coverage/engine-summary.txt
+
+      - name: Coverage in the run summary
+        run: |
+          {
+            echo "## Engine coverage"
+            echo '```text'
+            cat coverage/engine-summary.txt
+            echo '```'
+            echo "## UI coverage"
+            echo '```text'
+            grep -E '^(Statements|Branches|Functions|Lines)' apps/desktop/ui-coverage.txt || echo "see the coverage artifact"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: |
+            coverage/
+            apps/desktop/coverage/
+          retention-days: 14
