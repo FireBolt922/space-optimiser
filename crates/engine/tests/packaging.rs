@@ -39,6 +39,38 @@ fn the_version_has_one_source() {
     assert_eq!(lock["packages"][""]["version"], env!("CARGO_PKG_VERSION"));
 }
 
+/// The version of a package in Cargo.lock.
+fn locked_crate_version(name: &str) -> String {
+    let lock = fs::read_to_string(repo_root().join("Cargo.lock")).unwrap();
+    let header = format!("name = \"{name}\"\nversion = \"");
+    let start = lock.find(&header).expect("crate is in Cargo.lock") + header.len();
+    lock[start..].split('"').next().unwrap().to_string()
+}
+
+fn major_minor(version: &str) -> String {
+    version.split('.').take(2).collect::<Vec<_>>().join(".")
+}
+
+#[test]
+fn the_tauri_npm_packages_match_the_tauri_crate() {
+    // `tauri build` refuses when @tauri-apps/api and the tauri crate differ
+    // in MAJOR.MINOR. CI does not run `tauri build`; Publish does.
+    let crate_version = major_minor(&locked_crate_version("tauri"));
+    let lock: Value =
+        serde_json::from_str(&fs::read_to_string(desktop().join("package-lock.json")).unwrap())
+            .unwrap();
+    for package in ["@tauri-apps/api", "@tauri-apps/cli"] {
+        let installed = lock["packages"][format!("node_modules/{package}")]["version"]
+            .as_str()
+            .expect("package is in package-lock.json");
+        assert_eq!(
+            major_minor(installed),
+            crate_version,
+            "{package} {installed} must be on the tauri crate's {crate_version}.x line"
+        );
+    }
+}
+
 #[test]
 fn the_version_is_plain_major_minor_patch() {
     // The Windows MSI accepts only numeric versions, so a test build is a
