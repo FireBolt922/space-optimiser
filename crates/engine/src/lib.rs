@@ -9,12 +9,21 @@
 //! every action is written to the audit log, and the report measures free
 //! space before and after. Milestone M4 adds the other Normal Scan rows:
 //! browser caches (with running-browser detection), and Ubuntu thumbnail
-//! and font caches, through the same executor.
+//! and font caches, through the same executor. Milestone M5 adds Deep
+//! Scan: package caches, old logs, tool rows run by [`tool`] (the only
+//! module that starts a process), Docker's build cache, the large-file
+//! report, and totals that count each file once. Milestones M6 and M7 add
+//! "Show in folder" through the OS file manager (started by [`tool`]), a
+//! plain-text report export, the About data, and the Windows elevation
+//! refusal.
 
 mod audit;
 pub mod clock;
+mod dedup;
 pub mod discover;
+mod docker;
 mod execute;
+mod export;
 pub mod guard;
 pub mod measure;
 pub mod model;
@@ -23,6 +32,7 @@ pub mod policy;
 mod process;
 pub mod roots;
 mod session;
+mod tool;
 
 pub use session::{Config, Engine};
 
@@ -57,6 +67,16 @@ pub enum EngineError {
     RunningAsRoot,
     #[error("could not read this computer's folders: {0}")]
     Context(String),
+    #[error("could not open the folder")]
+    RevealFailed,
+    #[error("that item is no longer where the scan found it. Scan again.")]
+    CandidateGone,
+    #[error("the cleanup has not finished")]
+    RunNotFinished,
+    #[error("could not save the report: {0}")]
+    ExportFailed(String),
+    #[error("Space Optimiser does not run as administrator")]
+    RunningElevated,
 }
 
 impl EngineError {
@@ -74,6 +94,11 @@ impl EngineError {
             EngineError::RunInProgress => "run_in_progress",
             EngineError::RunningAsRoot => "running_as_root",
             EngineError::Context(_) => "context",
+            EngineError::RevealFailed => "reveal_failed",
+            EngineError::CandidateGone => "candidate_gone",
+            EngineError::RunNotFinished => "run_not_finished",
+            EngineError::ExportFailed(_) => "export_failed",
+            EngineError::RunningElevated => "running_elevated",
         }
     }
 }

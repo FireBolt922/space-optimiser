@@ -11,7 +11,7 @@ export function Scanning({ view, cancelling, onCancel }: Props) {
   const progress = view?.progress;
   return (
     <section className="screen" aria-labelledby="scanning-title">
-      <h1 id="scanning-title" className="title-xl">
+      <h1 id="scanning-title" className="title-xl" tabIndex={-1}>
         Scanning
       </h1>
       <p className="body" role="status">

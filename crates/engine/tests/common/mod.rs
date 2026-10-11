@@ -70,6 +70,7 @@ impl Home {
         &self,
         change: impl Fn(Context) -> Context + Send + Sync + 'static,
     ) -> Config {
+        assert_fixture_home(&self.root);
         let root = self.root.clone();
         Config::new(
             move || {
@@ -104,6 +105,47 @@ impl Home {
         } else {
             self.path(".config/google-chrome/Default")
         }
+    }
+
+    /// Fake tools live here, outside the home, as `PATH` for the scan.
+    pub fn tool_dir(&self) -> PathBuf {
+        self.root.parent().unwrap().join("bin")
+    }
+
+    /// The engine's empty work folder (next to the audit folder).
+    pub fn work_dir(&self) -> PathBuf {
+        self.root.parent().unwrap().join("work")
+    }
+
+    /// A fake tool: a shell script run with the tool runner's environment
+    /// (`HOME` is the fixture home).
+    #[cfg(unix)]
+    pub fn fake_tool(&self, name: &str, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = self.tool_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// `ctx` finding tools only in [`Home::tool_dir`]. The query timeout is
+    /// the real one: macOS checks each new script the first time it runs,
+    /// which can take seconds while many tests start scripts at once.
+    pub fn with_fake_tools(&self, ctx: Context) -> Context {
+        ctx.with_tool_dirs(vec![self.tool_dir()], Vec::new())
+            .with_work_dir(self.work_dir())
+            .with_tool_timeouts(Duration::from_secs(5), Duration::from_secs(10))
+    }
+
+    /// An engine over this home, files old, finding only the fake tools.
+    pub fn tool_engine(&self) -> Engine {
+        let bin = self.tool_dir();
+        Engine::new(self.config_with(move |ctx| {
+            ctx.with_tool_dirs(vec![bin.clone()], Vec::new())
+                .with_tool_timeouts(Duration::from_secs(5), Duration::from_secs(10))
+        }))
     }
 
     /// Files created by the test count as old (see [`Home::old_context`]).
@@ -167,6 +209,17 @@ pub fn execute(engine: &Engine, plan: &Plan, token: ConfirmationToken) -> Report
         .unwrap()
 }
 
+pub fn deep_scan(engine: &Engine) -> ScanView {
+    let scan_id = engine
+        .start_scan(StartScanArgs {
+            mode: ScanMode::Deep,
+        })
+        .unwrap();
+    let view = engine.wait_for_scan(ScanRef { scan_id }).unwrap();
+    assert_eq!(view.status, ScanStatus::Finished, "{:?}", view.error);
+    view
+}
+
 /// Scan, plan the named entries, confirm, execute.
 pub fn clean(engine: &Engine, names: &[&str]) -> Report {
     let view = scan(engine);
@@ -198,7 +251,25 @@ pub fn basic_home() -> Home {
     let root = dir.path().join("home");
     copy_tree(&fixture_source(), &root);
     let root = fs::canonicalize(&root).unwrap();
+    assert_fixture_home(&root);
     Home { _dir: dir, root }
+}
+
+/// The file that marks a folder as a fixture home (phase 10 risk). Tests that
+/// scan or delete refuse a home without it, so a mistake cannot point them
+/// at a real home.
+pub const FIXTURE_MARKER: &str = ".space-optimiser-fixture";
+
+/// Panics unless `root` holds [`FIXTURE_MARKER`] as a regular file (not a
+/// folder, not a link).
+pub fn assert_fixture_home(root: &Path) {
+    let marker = root.join(FIXTURE_MARKER);
+    let is_file = fs::symlink_metadata(&marker).is_ok_and(|m| m.file_type().is_file());
+    assert!(
+        is_file,
+        "{} is not a fixture home: {FIXTURE_MARKER} is missing or not a regular file",
+        root.display()
+    );
 }
 
 pub fn fixture_source() -> PathBuf {

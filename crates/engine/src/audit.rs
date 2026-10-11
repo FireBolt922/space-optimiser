@@ -98,16 +98,19 @@ impl Audit {
         })
     }
 
+    /// One action. `target` is the path in [`escaped`] form, or a tool's
+    /// command line.
     pub fn action(
         &mut self,
         catalog_id: CatalogId,
-        path: &Path,
+        target: &str,
         outcome: Outcome,
         detail: Option<&str>,
         bytes: u64,
     ) {
         let outcome = match outcome {
             Outcome::Removed => "removed",
+            Outcome::Ran => "ran",
             Outcome::Skipped => "skipped",
             Outcome::Failed => "failed",
             Outcome::NotRun => "not_run",
@@ -117,7 +120,7 @@ impl Audit {
                 time: now(),
                 run: self.run.clone(),
                 catalog_id: catalog_id.as_str().to_owned(),
-                path: escaped(path),
+                path: target.to_owned(),
                 outcome: outcome.to_owned(),
                 detail: detail.map(str::to_owned),
                 bytes,

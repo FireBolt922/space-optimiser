@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::discover::Progress;
 use crate::measure::FileId;
 use crate::policy::{CatalogId, RootRejection, SkipReason, ValidRoot};
+use crate::tool::Tool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -170,6 +171,18 @@ pub(crate) enum Scope {
     Entry,
     /// Everything inside the root; the root folder itself stays (cache rows).
     Contents,
+    /// The row's tool runs its own clean command.
+    Tool,
+    /// Shown only.
+    Report,
+}
+
+/// A tool row's clean command, fixed by the catalog. The executor checks
+/// `args` against the catalog again before running.
+#[derive(Debug, Clone)]
+pub(crate) struct ToolAction {
+    pub tool: Tool,
+    pub args: &'static [&'static str],
 }
 
 /// A scan result (phase 4 item 7). The path and identity stay in the engine;
@@ -182,7 +195,16 @@ pub struct Candidate {
     pub explanation: &'static str,
     pub location_label: &'static str,
     /// Allocated bytes, deduplicated by hard link (shared files count 0).
+    /// Zero for tool rows, whose tool decides what to remove.
     pub estimated_bytes: u64,
+    /// For tool rows: the most the tool could free (the cache's size, or
+    /// the tool's own reclaimable number). Never added to the delete total.
+    pub upper_bound_bytes: Option<u64>,
+    /// How the location was found, for tool rows ("from `pnpm store path`").
+    pub found_by: Option<String>,
+    /// Other candidates this one removes too (a folder deleted whole that
+    /// holds another row's folder). Selecting both counts them once.
+    pub covers: Vec<CandidateId>,
     pub file_count: u64,
     pub links_not_followed: u64,
     pub labels: Vec<Label>,
@@ -191,16 +213,22 @@ pub struct Candidate {
     pub confidence: Confidence,
     pub action: Action,
     pub platform: Platform,
+    /// "Show in folder" is offered. False only for Docker's build cache,
+    /// whose path is the home folder rather than the cache.
+    pub revealable: bool,
     #[serde(skip)]
     pub(crate) path: PathBuf,
     #[serde(skip)]
     pub(crate) file_id: FileId,
     /// The validated root: the folder the entry sits directly in, or the
-    /// cache folder itself for a `Contents` candidate.
+    /// cache folder itself for a `Contents` or `Tool` candidate. None for
+    /// Docker and the large-file report.
     #[serde(skip)]
-    pub(crate) root: ValidRoot,
+    pub(crate) root: Option<ValidRoot>,
     #[serde(skip)]
     pub(crate) scope: Scope,
+    #[serde(skip)]
+    pub(crate) tool: Option<ToolAction>,
     /// Sorted identities of everything inside a directory entry, or inside
     /// the cache folder.
     #[serde(skip)]
@@ -246,6 +274,17 @@ pub struct RootView {
     pub frees_memory: bool,
 }
 
+/// Something a row found that is not a candidate: a tool that was not run,
+/// Docker pointing elsewhere, volumes that are never offered.
+#[derive(Debug, Clone, Serialize)]
+pub struct Note {
+    pub catalog_id: CatalogId,
+    pub location_label: &'static str,
+    pub text: String,
+    /// A size the text refers to, for the UI to format.
+    pub bytes: Option<u64>,
+}
+
 /// What `get_scan` returns. Candidates arrive when the scan finishes.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanView {
@@ -258,6 +297,7 @@ pub struct ScanView {
     pub candidates: Vec<Candidate>,
     pub skipped: Vec<SkippedView>,
     pub roots: Vec<RootView>,
+    pub notes: Vec<Note>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -268,6 +308,7 @@ pub struct PlanItem {
     /// What will happen, in words (phase 2 item 11).
     pub action_text: &'static str,
     pub estimated_bytes: u64,
+    pub upper_bound_bytes: Option<u64>,
     pub file_count: u64,
 }
 
@@ -278,7 +319,11 @@ pub struct Plan {
     pub plan_id: PlanId,
     pub scan_id: ScanId,
     pub items: Vec<PlanItem>,
+    /// Allocated bytes of the planned deletes, each file counted once.
     pub estimated_bytes: u64,
+    /// The most the planned tool commands could free. Shown on its own
+    /// line, never added to `estimated_bytes` (catalog dedup rule 5).
+    pub tool_upper_bound_bytes: u64,
     /// Seconds until the plan expires if the computer stays awake.
     pub expires_in_secs: u64,
 }
@@ -298,6 +343,9 @@ pub enum ExecuteStart {
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Removed,
+    /// A tool's clean command finished. It reports no byte count; the free
+    /// space change is the measurement.
+    Ran,
     Skipped,
     Failed,
     /// Stop was pressed before this item.
@@ -322,6 +370,12 @@ pub enum SkipCause {
     /// ruled out.
     #[error("could not check whether the browser is open")]
     BrowserCheckFailed,
+    /// The tool is busy (a lock held by another process).
+    #[error("the tool is busy with another process. Try again later")]
+    ToolBusy,
+    /// Docker no longer points at this computer.
+    #[error("Docker now points to another machine")]
+    DockerNotLocal,
     #[error("{0}")]
     Entry(SkipReason),
     #[error("{0}")]
@@ -395,6 +449,26 @@ pub struct RunView {
 pub struct InterruptedAction {
     pub display_name: String,
     pub outcome: String,
+}
+
+/// What the About screen shows (phase 12). Paths are for reading only; no
+/// command accepts them back.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppInfo {
+    pub version: &'static str,
+    pub platform: Platform,
+    /// Where the audit log is written, so a person can delete it themselves.
+    pub audit_log_path: String,
+    /// The folder `export_report` saves into.
+    pub export_folder: String,
+}
+
+/// A report saved by `export_report`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportedReport {
+    /// The full path, for display.
+    pub path: String,
+    pub file_name: String,
 }
 
 /// A run that wrote "run started" and never "run finished" (phase 7 item 8).

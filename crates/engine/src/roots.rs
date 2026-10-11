@@ -1,4 +1,4 @@
-//! Where each Normal Scan cache row looks (phase 5 items 1, 2, 3, and 6).
+//! Where each cache row looks (phase 5 items 1, 2, 3, and 6; phase 6).
 //! Every location is a fixed suffix below the home, or below Local AppData
 //! on Windows. Nothing here reads inside a cache: it lists profile folders,
 //! picks the cache folders by exact name, and checks each one with
@@ -110,8 +110,8 @@ pub struct CacheRoot {
 }
 
 /// The cache folders `row` covers on `platform`. Only folders that exist
-/// are listed: a missing browser is a quiet absence. Rows that are not
-/// Normal Scan cache rows have none.
+/// are listed: a missing browser is a quiet absence. Rows that run a tool,
+/// and the large-file report, have none.
 pub fn cache_roots(ctx: &Context, row: CatalogId, platform: Platform) -> Vec<CacheRoot> {
     let home = ctx.home();
     let mut found = Vec::new();
@@ -137,9 +137,90 @@ pub fn cache_roots(ctx: &Context, row: CatalogId, platform: Platform) -> Vec<Cac
             fixed(ctx, &explorer, "Explorer thumbnails", &mut found);
         }
         (CatalogId::BrowserHttpCache, platform) => browsers(ctx, platform, &mut found),
+        (CatalogId::PkgNpx, Platform::Windows) => {
+            let npx = join(ctx.local_app_data(), "npm-cache/_npx");
+            fixed(ctx, &npx, "~/AppData/Local/npm-cache/_npx", &mut found);
+        }
+        (CatalogId::PkgNpx, _) => {
+            fixed(ctx, &join(home, ".npm/_npx"), "~/.npm/_npx", &mut found);
+        }
+        (CatalogId::PkgCargoCache, _) => {
+            for relative in [".cargo/registry/cache", ".cargo/git/checkouts"] {
+                fixed(
+                    ctx,
+                    &join(home, relative),
+                    &format!("~/{relative}"),
+                    &mut found,
+                );
+            }
+        }
+        (CatalogId::PkgGradleCaches, _) => {
+            fixed(
+                ctx,
+                &join(home, ".gradle/caches"),
+                "~/.gradle/caches",
+                &mut found,
+            );
+        }
+        (CatalogId::PkgNugetHttp, Platform::Windows) => {
+            for relative in ["NuGet/v3-cache", "NuGet/http-cache"] {
+                let path = join(ctx.local_app_data(), relative);
+                let name = format!("~/AppData/Local/{relative}");
+                fixed(ctx, &path, &name, &mut found);
+            }
+        }
+        (CatalogId::PkgNugetHttp, _) => {
+            for relative in [
+                ".local/share/NuGet/http-cache",
+                ".local/share/NuGet/v3-cache",
+            ] {
+                fixed(
+                    ctx,
+                    &join(home, relative),
+                    &format!("~/{relative}"),
+                    &mut found,
+                );
+            }
+        }
+        (CatalogId::UserLogsOld, Platform::Macos) => {
+            fixed(
+                ctx,
+                &join(home, "Library/Logs"),
+                "~/Library/Logs",
+                &mut found,
+            );
+        }
         _ => {}
     }
     found
+}
+
+/// Where a tool row's cache is when the tool does not say (phase 6 item
+/// 2). Used only to show the folder as "not sure"; nothing is offered.
+pub(crate) fn default_tool_cache(
+    ctx: &Context,
+    row: CatalogId,
+    platform: Platform,
+) -> Option<PathBuf> {
+    let home = ctx.home();
+    let local = ctx.local_app_data();
+    let path = match (row, platform) {
+        (CatalogId::PkgNpmCache, Platform::Windows) => join(local, "npm-cache"),
+        (CatalogId::PkgNpmCache, _) => join(home, ".npm"),
+        (CatalogId::PkgPnpmStore, Platform::Macos) => join(home, "Library/pnpm/store"),
+        (CatalogId::PkgPnpmStore, Platform::Linux) => join(home, ".local/share/pnpm/store"),
+        (CatalogId::PkgPnpmStore, Platform::Windows) => join(local, "pnpm/store"),
+        (CatalogId::PkgYarnCache, Platform::Macos) => join(home, "Library/Caches/Yarn"),
+        (CatalogId::PkgYarnCache, Platform::Linux) => join(home, ".cache/yarn"),
+        (CatalogId::PkgYarnCache, Platform::Windows) => join(local, "Yarn/Cache"),
+        (CatalogId::PkgPipCache, Platform::Macos) => join(home, "Library/Caches/pip"),
+        (CatalogId::PkgPipCache, Platform::Linux) => join(home, ".cache/pip"),
+        (CatalogId::PkgPipCache, Platform::Windows) => join(local, "pip/cache"),
+        (CatalogId::PkgUvCache, Platform::Windows) => join(local, "uv/cache"),
+        (CatalogId::PkgUvCache, _) => join(home, ".cache/uv"),
+        _ => return None,
+    };
+    Some(path)
 }
 
 /// Checks a planned cache folder again, immediately before deleting it:

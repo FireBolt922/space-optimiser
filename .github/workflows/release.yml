@@ -1,0 +1,82 @@
+name: Release bundles
+
+# Builds unsigned installers for each OS and stores them as workflow
+# artifacts. It does not sign, notarize, or publish anything: signing needs
+# certificates that are not in this repository, and a release page is made
+# by hand after the release checklist passes.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            bundles: app,dmg
+          - os: ubuntu-22.04
+            bundles: deb
+          - os: windows-latest
+            bundles: nsis,msi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from rust-toolchain.toml, as in CI.
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - name: Install WebKitGTK (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # The bundle embeds the built UI, so build it before cargo tests the
+      # shell.
+      - name: Test UI
+        working-directory: apps/desktop
+        run: |
+          npm test
+          npm run build
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # `tauri build` runs `npm run build` itself (beforeBuildCommand).
+      - name: Build bundles
+        working-directory: apps/desktop
+        run: npx tauri build --ci --bundles ${{ matrix.bundles }}
+
+      # Only the installers. Never audit logs, fixture homes, or test output.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-optimiser-${{ matrix.os }}
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
+            target/release/bundle/deb/*.deb
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+          if-no-files-found: error
+          retention-days: 30

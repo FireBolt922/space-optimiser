@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{Action, Risk};
+use crate::tool::ToolEnv;
 
 /// First-release catalog rows. `fixtures/catalog-mvp-ids.txt` lists the same
 /// ids; a test fails if they drift.
@@ -218,18 +219,71 @@ impl CatalogId {
         }
     }
 
+    /// The results group heading. One group per row.
     pub const fn location_label(self) -> &'static str {
         match self {
             CatalogId::UserTemp => "Temporary files",
-            CatalogId::ThumbnailCache | CatalogId::WindowsThumbcache => "Thumbnails",
+            CatalogId::ThumbnailCache => "Thumbnails",
+            CatalogId::WindowsThumbcache => "Explorer thumbnails",
             CatalogId::FontCache => "Font cache",
             CatalogId::BrowserHttpCache => "Browser cache",
-            CatalogId::UserLogsOld => "Logs",
-            CatalogId::DockerBuildCache => "Docker",
-            CatalogId::LargeFilesReport => "Home folder",
-            _ => "Developer caches",
+            CatalogId::PkgNpmCache => "npm cache",
+            CatalogId::PkgNpx => "npx packages",
+            CatalogId::PkgPnpmStore => "pnpm store",
+            CatalogId::PkgYarnCache => "Yarn cache",
+            CatalogId::PkgPipCache => "pip cache",
+            CatalogId::PkgUvCache => "uv cache",
+            CatalogId::PkgCargoCache => "Cargo downloads",
+            CatalogId::PkgGradleCaches => "Gradle caches",
+            CatalogId::PkgNugetHttp => "NuGet downloads",
+            CatalogId::UserLogsOld => "Old logs",
+            CatalogId::DockerBuildCache => "Docker build cache",
+            CatalogId::LargeFilesReport => "Large files",
         }
     }
+
+    /// Whether a folder holding a project marker (`.git`, `package.json`,
+    /// ...) is skipped. Package caches hold packages, which carry those
+    /// files by design, inside fixed tool-owned roots (catalog denylist).
+    pub const fn checks_project_markers(self) -> bool {
+        !matches!(
+            self,
+            CatalogId::PkgNpx
+                | CatalogId::PkgCargoCache
+                | CatalogId::PkgGradleCaches
+                | CatalogId::PkgNugetHttp
+                | CatalogId::PkgNpmCache
+                | CatalogId::PkgPnpmStore
+                | CatalogId::PkgYarnCache
+                | CatalogId::PkgPipCache
+                | CatalogId::PkgUvCache
+        )
+    }
+}
+
+/// `*.log`, `*.log.<digits>`, `*.log.gz`, and `*.log.<digits>.gz` (catalog
+/// `user-logs-old`).
+pub fn is_log_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let name = name.strip_suffix(".gz").unwrap_or(name);
+    if name.ends_with(".log") {
+        return name.len() > ".log".len();
+    }
+    match name.rsplit_once(".log.") {
+        Some((stem, digits)) => {
+            !stem.is_empty() && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+/// The name rule for `row`: `user-logs-old` removes log files only.
+/// Folders are judged by what is inside them.
+pub(crate) fn name_rule(row: CatalogId, name: &OsStr, kind: Kind) -> Option<SkipReason> {
+    (row == CatalogId::UserLogsOld && kind == Kind::File && !is_log_name(name))
+        .then_some(SkipReason::NotALog)
 }
 
 /// `user-temp` entries must be older than this (catalog `user-temp`).
@@ -273,7 +327,9 @@ pub enum SkipReason {
     /// Something inside belongs to another user.
     #[error("part of it belongs to another user")]
     OtherOwner,
-    /// Read-only (Windows) or immutable (macOS). Attributes are never cleared.
+    /// Read-only (Windows) or immutable (macOS), or on Windows held open by
+    /// another program that does not share delete access. Attributes are
+    /// never cleared.
     #[error("it is locked")]
     Locked,
     /// Is or contains a protected folder.
@@ -285,6 +341,9 @@ pub enum SkipReason {
     /// A cache folder whose real location is not inside the home folder.
     #[error("it is outside your home folder")]
     OutsideHome,
+    /// In a log folder, a file that is not a log.
+    #[error("it holds files that are not logs")]
+    NotALog,
 }
 
 /// The catalog entry rules for `row`, applied to an entry and to every
@@ -473,9 +532,18 @@ pub struct Context {
     now: SystemTime,
     processes: Processes,
     visits: Option<VisitLog>,
+    tools: ToolEnv,
+    /// The large-file report lists files at least this big (allocated).
+    large_file_min: u64,
     #[cfg(unix)]
     euid: u32,
+    /// The process has an elevated (administrator) token.
+    #[cfg(windows)]
+    elevated: bool,
 }
+
+/// Files at least this big (allocated) are listed by `large-files-report`.
+pub const LARGE_FILE_MIN: u64 = 500 * 1000 * 1000;
 
 impl Context {
     pub(crate) fn new(
@@ -494,9 +562,13 @@ impl Context {
             now: SystemTime::now(),
             processes: Processes::System,
             visits: None,
+            tools: ToolEnv::default(),
+            large_file_min: LARGE_FILE_MIN,
             #[cfg(unix)]
             // SAFETY: geteuid has no preconditions and cannot fail.
             euid: unsafe { libc::geteuid() },
+            #[cfg(windows)]
+            elevated: crate::guard::is_elevated(),
         };
         for path in protected {
             ctx.add_protected(path);
@@ -505,13 +577,30 @@ impl Context {
     }
 
     /// A context for a fixture home: the standard protected folders under
-    /// `home` and its `user-dirs.dirs`, no temp roots, the real clock, and
-    /// no running browsers.
+    /// `home` and its `user-dirs.dirs`, no temp roots, the real clock, no
+    /// running browsers, no tools, and (on Windows) a token that is not
+    /// elevated: CI runners are administrators, and the desktop shell
+    /// refuses an elevated start before any context exists.
     #[doc(hidden)]
     pub fn for_fixture(home: &Path) -> Self {
         let protected = crate::platform::protected_under_home(home);
-        Self::new(home.to_path_buf(), protected, Vec::new(), None)
-            .with_running_processes::<&str>(&[])
+        let ctx = Self::new(home.to_path_buf(), protected, Vec::new(), None)
+            .with_running_processes::<&str>(&[]);
+        #[cfg(windows)]
+        let ctx = ctx.with_elevated(false);
+        ctx
+    }
+
+    #[cfg(windows)]
+    #[doc(hidden)]
+    pub fn with_elevated(mut self, elevated: bool) -> Self {
+        self.elevated = elevated;
+        self
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn elevated(&self) -> bool {
+        self.elevated
     }
 
     // Set by the Windows adapter from the Local AppData Known Folder.
@@ -541,6 +630,65 @@ impl Context {
     pub fn with_system_processes(mut self) -> Self {
         self.processes = Processes::System;
         self
+    }
+
+    /// Where tools are looked for: `path` stands for `PATH`, `install`
+    /// for the catalog's fixed install folders.
+    #[doc(hidden)]
+    pub fn with_tool_dirs(mut self, path: Vec<PathBuf>, install: Vec<PathBuf>) -> Self {
+        self.tools.path = path;
+        self.tools.install_dirs = install;
+        self
+    }
+
+    /// The empty folder tools run in. Set by the engine next to the audit
+    /// folder.
+    #[doc(hidden)]
+    pub fn with_work_dir(mut self, dir: PathBuf) -> Self {
+        self.tools.work_dir = Some(dir);
+        self
+    }
+
+    pub(crate) fn has_work_dir(&self) -> bool {
+        self.tools.work_dir.is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn with_tool_timeouts(mut self, query: Duration, action: Duration) -> Self {
+        self.tools.query_timeout = query;
+        self.tools.action_timeout = action;
+        self
+    }
+
+    /// A variable passed to tools unchanged (`DOCKER_HOST`, `DOCKER_CONTEXT`).
+    #[doc(hidden)]
+    pub fn with_tool_env(mut self, key: &str, value: impl Into<std::ffi::OsString>) -> Self {
+        self.tools.pass_env.push((key.into(), value.into()));
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_large_file_min(mut self, bytes: u64) -> Self {
+        self.large_file_min = bytes;
+        self
+    }
+
+    pub(crate) fn tools(&self) -> &ToolEnv {
+        &self.tools
+    }
+
+    /// A pass-through variable, if set.
+    pub(crate) fn tool_env(&self, key: &str) -> Option<&std::ffi::OsStr> {
+        self.tools
+            .pass_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_os_str())
+    }
+
+    pub(crate) fn large_file_min(&self) -> u64 {
+        self.large_file_min
     }
 
     #[doc(hidden)]
@@ -623,6 +771,11 @@ impl Context {
         let path = fs::canonicalize(&path).unwrap_or(path);
         let id = measure::file_id(&path).ok();
         self.protected.push(Protected { path, id });
+    }
+
+    /// The protected folders, as resolved when the context was built.
+    pub(crate) fn protected_paths(&self) -> impl Iterator<Item = &Path> {
+        self.protected.iter().map(|p| p.path.as_path())
     }
 
     pub(crate) fn is_protected_id(&self, id: FileId) -> bool {

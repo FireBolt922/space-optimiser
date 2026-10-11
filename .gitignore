@@ -67,6 +67,8 @@ tmp/
 !fixtures/**/tmp/
 !fixtures/**/.cache/
 !fixtures/**/*.log
+!fixtures/**/.npm/
+!fixtures/**/node_modules/
 
 # Tauri regenerates these schemas on every build
 apps/desktop/src-tauri/gen/
