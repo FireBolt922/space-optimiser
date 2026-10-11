@@ -162,3 +162,58 @@ fn this_machine_resolves_a_home_and_temp_roots() {
         assert!(temp.starts_with(area), "{}", temp.display());
     }
 }
+
+// A temp variable pointing at a source tree is rejected before any entry is
+// read. The entry rule already skips a project inside the temp folder; this
+// is the folder itself (open-source audit, 2026-10-11).
+#[test]
+fn a_temp_root_that_is_a_project_is_rejected() {
+    let home = common::basic_home();
+    let repo = home.mkdir("projects/repo");
+    home.mkdir("projects/repo/.git");
+    home.write("projects/repo/src.txt", b"old");
+    let ctx = Context::for_fixture(&home.root);
+    assert_eq!(rejection(&ctx, &repo), RootRejection::IsProject);
+
+    let dotnet = home.mkdir("projects/app");
+    home.write("projects/app/App.csproj", b"<Project />");
+    assert_eq!(rejection(&ctx, &dotnet), RootRejection::IsProject);
+
+    // A marker deeper down is the entry rule's job, not the root's.
+    let plain = home.mkdir("projects/plain");
+    home.mkdir("projects/plain/old-build/.git");
+    assert!(validate_temp_root(&ctx, &plain, OwnerRule::Root).is_ok());
+}
+
+// The Trash is never emptied, and the large-file report does not look in it.
+#[test]
+fn trash_folders_are_protected() {
+    let home = common::basic_home();
+    home.mkdir(".Trash/old");
+    home.mkdir(".local/share/Trash/files");
+    let ctx = Context::for_fixture(&home.root);
+    assert!(ctx.is_protected(&home.path(".Trash")));
+    assert!(ctx.is_protected(&home.path(".Trash/old")));
+    assert!(ctx.is_protected(&home.path(".local/share/Trash/files")));
+    assert!(!ctx.is_protected(&home.path(".local/share")));
+}
+
+// On Windows, `TEMP` may point anywhere; the root must stay under Local
+// AppData, as on macOS it must stay under `/private/var/folders`.
+#[test]
+fn this_machine_requires_a_temp_area_on_macos_and_windows() {
+    let ctx = platform::resolve_context().unwrap();
+    if cfg!(target_os = "linux") {
+        assert!(ctx.required_temp_area().is_none());
+    } else {
+        let area = ctx.required_temp_area().expect("a required temp area");
+        assert!(area.is_absolute(), "{}", area.display());
+        if cfg!(windows) {
+            assert!(
+                area.ends_with(Path::new("AppData").join("Local")),
+                "{}",
+                area.display()
+            );
+        }
+    }
+}
