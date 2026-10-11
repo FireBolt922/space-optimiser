@@ -12,6 +12,10 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained crates are reported for our own dependencies. Tauri's
+# transitive tree carries several (unic-*, proc-macro-error) that only an
+# upstream release can replace.
+unmaintained = "workspace"
 ignore = []
 
 [licenses]
@@ -40,6 +44,8 @@ ignore = true
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The shell depends on the engine by path inside this workspace.
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]
