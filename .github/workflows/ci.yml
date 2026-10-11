@@ -116,6 +116,9 @@ jobs:
       - name: Prettier
         run: npx prettier --check .
 
+      - name: Download page renderer
+        run: node --test 'site/*.test.mjs'
+
       # PRs are squash-merged, so the PR title becomes the commit on main.
       - name: PR title is a Conventional Commit
         if: github.event_name == 'pull_request'
