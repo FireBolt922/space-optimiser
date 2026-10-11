@@ -12,6 +12,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build"
+    # A major version is a deliberate change with a plan update, not a bot PR.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
@@ -21,6 +25,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       desktop-minor-and-patch:
         update-types: [minor, patch]
@@ -30,6 +37,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       tooling-minor-and-patch:
         update-types: [minor, patch]
