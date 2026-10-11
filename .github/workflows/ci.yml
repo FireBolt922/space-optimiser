@@ -181,6 +181,7 @@ jobs:
 
       - name: Engine coverage
         run: |
+          mkdir -p coverage
           cargo llvm-cov --workspace --locked --lcov --output-path coverage/engine.lcov
           cargo llvm-cov report --summary-only | tee coverage/engine-summary.txt
 

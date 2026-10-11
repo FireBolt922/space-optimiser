@@ -66,15 +66,27 @@ fn a_linked_marker_does_not_count() {
     assert!(!is_fixture_home(&home.root));
 }
 
-// An elevated token is refused before anything runs (phase 3, phase 9).
+// An elevated token is refused before anything runs (phase 3, phase 9):
+// the scan refuses, and a plan made while not elevated is refused at
+// execute if the token is elevated by then.
 #[cfg(windows)]
 #[test]
 fn an_elevated_process_executes_nothing() {
-    use space_optimiser_engine::model::{ExecutePlanArgs, PlanRef};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use space_optimiser_engine::model::{
+        ExecutePlanArgs, PlanRef, ScanMode, ScanRef, ScanStatus, StartScanArgs,
+    };
     use space_optimiser_engine::{Engine, EngineError};
 
     let home = common::basic_home();
-    let engine = Engine::new(home.config_with(|ctx| ctx.with_elevated(true)));
+    let elevated = Arc::new(AtomicBool::new(false));
+    let flag = elevated.clone();
+    let engine =
+        Engine::new(home.config_with(move |ctx| ctx.with_elevated(flag.load(Ordering::SeqCst))));
+
+    // Not elevated: scan, plan, confirm.
     let view = common::scan(&engine);
     let plan = common::plan(&engine, &view, &["old-download.bin"]);
     let token = engine
@@ -82,11 +94,34 @@ fn an_elevated_process_executes_nothing() {
             plan_id: plan.plan_id,
         })
         .unwrap();
+
+    // Elevated now: execute is refused and the file stays.
+    elevated.store(true, Ordering::SeqCst);
     let result = engine.execute_plan(ExecutePlanArgs {
         plan_id: plan.plan_id,
         confirmation_token: token,
         keep_log_in_memory: false,
     });
     assert_eq!(result.unwrap_err(), EngineError::RunningElevated);
+    assert!(home.path("tmp/old-download.bin").exists());
+
+    // Elevated: a scan does not run at all.
+    let scan_id = engine
+        .start_scan(StartScanArgs {
+            mode: ScanMode::Normal,
+        })
+        .unwrap();
+    let refused = engine.wait_for_scan(ScanRef { scan_id }).unwrap();
+    assert_eq!(refused.status, ScanStatus::Failed);
+    assert!(refused.candidates.is_empty());
+    assert!(
+        refused
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("administrator"),
+        "{:?}",
+        refused.error
+    );
     assert!(home.path("tmp/old-download.bin").exists());
 }
