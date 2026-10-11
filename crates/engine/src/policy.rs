@@ -209,6 +209,23 @@ impl CatalogId {
         }
     }
 
+    /// What to do when the row's tool reports that another process is using
+    /// its cache. Shown with a skipped item; the app never forces a clean.
+    pub const fn busy_hint(self) -> Option<&'static str> {
+        match self {
+            CatalogId::PkgUvCache => Some(
+                "Another uv program is using the cache. Tool servers started with `uvx` and `uv run` keep it busy. Close them, then run the cleanup again.",
+            ),
+            CatalogId::PkgNpmCache
+            | CatalogId::PkgPnpmStore
+            | CatalogId::PkgYarnCache
+            | CatalogId::PkgPipCache => Some(
+                "Another install is using the cache. Let it finish or close it, then run the cleanup again.",
+            ),
+            _ => None,
+        }
+    }
+
     /// The age gate in the catalog entry rules. Cache rows have none: the
     /// whole folder is regenerable.
     pub const fn min_age(self) -> Option<Duration> {
@@ -659,6 +676,13 @@ impl Context {
     pub fn with_tool_timeouts(mut self, query: Duration, action: Duration) -> Self {
         self.tools.query_timeout = query;
         self.tools.action_timeout = action;
+        self
+    }
+
+    /// How long a long read-only query (Docker's detailed report) may take.
+    #[doc(hidden)]
+    pub fn with_detail_timeout(mut self, timeout: Duration) -> Self {
+        self.tools.detail_timeout = timeout;
         self
     }
 

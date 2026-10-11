@@ -5,8 +5,14 @@
 //! cache line can become a candidate; volumes are never offered. The clean
 //! command is `docker builder prune -f` (dangling build cache, no `-a`).
 
+use std::fs;
+use std::path::PathBuf;
+
 use serde_json::Value;
 
+use crate::discover::CancelToken;
+use crate::measure;
+use crate::model::{DiskFile, DockerContainer, DockerImage, DockerVolume};
 use crate::policy::Context;
 use crate::tool::{self, Exit, Tool};
 
@@ -33,6 +39,153 @@ pub(crate) const SILENT: &str = "Docker did not respond.";
 pub(crate) const UNREADABLE: &str = "Could not read Docker's report.";
 pub(crate) const SETTINGS: &str =
     "Could not read Docker's settings, so its build cache is not offered.";
+
+pub(crate) const DETAIL_SLOW: &str =
+    "Docker took too long to list its images, containers, and volumes.";
+pub(crate) const DETAIL_UNREADABLE: &str =
+    "Could not read Docker's list of images, containers, and volumes.";
+
+/// Docker's images, containers, and volumes, for information only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Lists {
+    pub images: Vec<DockerImage>,
+    pub containers: Vec<DockerContainer>,
+    pub volumes: Vec<DockerVolume>,
+}
+
+pub(crate) enum Details {
+    Listed(Lists),
+    /// Why there are no lists, in words.
+    Note(&'static str),
+    Cancelled,
+}
+
+/// `docker system df -v`, read-only, after [`status`] found a local Docker
+/// that answers. It can take long (Docker sizes every volume), so it has
+/// its own timeout and stops at once when the scan is cancelled.
+pub(crate) fn details(ctx: &Context, docker: &Tool, cancel: &CancelToken) -> Details {
+    let args = ["system", "df", "-v", "--format", "json"];
+    let timeout = ctx.tools().detail_timeout;
+    match tool::run_with_lines(ctx, docker, &args, timeout, &[], None, Some(cancel)) {
+        Ok(out) => match out.exit {
+            Exit::Success => match parse_verbose(&out.stdout) {
+                Some(lists) => Details::Listed(lists),
+                None => Details::Note(DETAIL_UNREADABLE),
+            },
+            Exit::Cancelled => Details::Cancelled,
+            Exit::TimedOut => Details::Note(DETAIL_SLOW),
+            Exit::Failed(_) | Exit::Stopped(_) => Details::Note(DETAIL_UNREADABLE),
+        },
+        Err(_) => Details::Note(DETAIL_UNREADABLE),
+    }
+}
+
+/// One JSON object with `Images`, `Containers`, and `Volumes` arrays, whose
+/// numbers are strings. A missing array is empty; anything that is not
+/// such an object is `None`.
+pub(crate) fn parse_verbose(output: &str) -> Option<Lists> {
+    let value: Value = serde_json::from_str(output.trim()).ok()?;
+    let object = value.as_object()?;
+    if !["Images", "Containers", "Volumes"]
+        .iter()
+        .any(|k| object.contains_key(*k))
+    {
+        return None;
+    }
+    let rows = |key: &str| -> Vec<&Value> {
+        object
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    };
+    Some(Lists {
+        images: rows("Images")
+            .into_iter()
+            .map(|r| DockerImage {
+                repository: text(r, "Repository"),
+                tag: text(r, "Tag"),
+                size_bytes: size(r, "Size"),
+                unique_bytes: size(r, "UniqueSize"),
+                containers: count(r, "Containers"),
+            })
+            .collect(),
+        containers: rows("Containers")
+            .into_iter()
+            .map(|r| DockerContainer {
+                name: text(r, "Names"),
+                image: text(r, "Image"),
+                state: text(r, "State"),
+                status: text(r, "Status"),
+                size_bytes: size(r, "Size"),
+            })
+            .collect(),
+        volumes: rows("Volumes")
+            .into_iter()
+            .map(|r| DockerVolume {
+                name: text(r, "Name"),
+                size_bytes: size(r, "Size"),
+                in_use_by: count(r, "Links"),
+            })
+            .collect(),
+    })
+}
+
+fn text(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn size(row: &Value, key: &str) -> Option<u64> {
+    row.get(key).and_then(Value::as_str).and_then(parse_size)
+}
+
+/// A count Docker prints as a string ("1") or a number; "N/A" is none.
+fn count(row: &Value, key: &str) -> Option<u64> {
+    match row.get(key)? {
+        Value::String(s) => s.trim().parse().ok(),
+        Value::Number(n) => n.as_u64(),
+        _ => None,
+    }
+}
+
+/// Where Docker Desktop keeps its virtual disk on this OS, newest layout
+/// first.
+fn disk_file_paths(ctx: &Context) -> Vec<PathBuf> {
+    if cfg!(target_os = "macos") {
+        vec![
+            ctx.home()
+                .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"),
+        ]
+    } else if cfg!(windows) {
+        let docker = ctx.local_app_data().join("Docker").join("wsl");
+        vec![
+            docker.join("disk").join("docker_data.vhdx"),
+            docker.join("data").join("ext4.vhdx"),
+        ]
+    } else {
+        vec![ctx.home().join(".docker/desktop/vms/0/data/Docker.raw")]
+    }
+}
+
+/// Docker Desktop's disk file, measured with one `stat` of its fixed path.
+/// No folder on the way is listed, and a link is not followed or measured.
+pub(crate) fn disk_file(ctx: &Context) -> Option<DiskFile> {
+    disk_file_paths(ctx).into_iter().find_map(|path| {
+        let metadata = fs::symlink_metadata(&path).ok()?;
+        if !metadata.file_type().is_file() {
+            return None;
+        }
+        let facts = measure::facts(&path, &metadata).ok()?;
+        Some(DiskFile {
+            location_label: tool::home_relative(ctx.home(), &path),
+            allocated_bytes: facts.size.bytes,
+            logical_bytes: metadata.len(),
+        })
+    })
+}
 
 /// The checks before anything is offered.
 pub(crate) fn status(ctx: &Context, docker: &Tool) -> Status {
@@ -193,6 +346,31 @@ pub(crate) fn parse_size(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_verbose_report_reads_strings_as_numbers_and_tolerates_gaps() {
+        let lists = parse_verbose(
+            r#"{"Images":[{"Repository":"a","Tag":"1","Size":"1.4GB","UniqueSize":"N/A","Containers":"2"}],
+                "Volumes":[{"Name":"db","Size":"N/A","Links":"N/A"},{"Name":"x","Size":"0B","Links":0}],
+                "Unknown":[1]}"#,
+        )
+        .unwrap();
+        assert_eq!(lists.images[0].size_bytes, Some(1_400_000_000));
+        assert_eq!(lists.images[0].unique_bytes, None);
+        assert_eq!(lists.images[0].containers, Some(2));
+        assert!(lists.containers.is_empty());
+        assert_eq!(lists.volumes[0].size_bytes, None);
+        assert_eq!(lists.volumes[0].in_use_by, None);
+        assert_eq!(lists.volumes[1].size_bytes, Some(0));
+        assert_eq!(lists.volumes[1].in_use_by, Some(0));
+    }
+
+    #[test]
+    fn anything_but_the_verbose_object_is_unreadable() {
+        for output in ["", "not json", "[]", "{}", r#"{"Type":"Images"}"#, "42"] {
+            assert_eq!(parse_verbose(output), None, "{output}");
+        }
+    }
 
     #[test]
     fn only_a_local_socket_or_pipe_is_local() {

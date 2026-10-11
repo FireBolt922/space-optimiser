@@ -83,9 +83,72 @@ describe("scanning", () => {
     await waitFor(() => expect(engine.cancelScan).toHaveBeenCalledWith(7));
     await screen.findByRole("button", { name: "Normal Scan" });
   });
+
+  it("names the stage it is in, the tool it is asking, and each stage's state", async () => {
+    const engine = fakeEngine({
+      scanRuns: true,
+      scanProgress: {
+        files_seen: 1_203_836,
+        bytes_seen: 39_300_000_000,
+        stage: "tools",
+        detail: "uv",
+      },
+      scanStages: ["temp", "caches", "logs", "tools", "docker", "large_files"],
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    expect(await screen.findByText("Asking uv where its cache is.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Asking uv where its cache is.");
+    expect(screen.getByText("1,203,836 files so far, 39.3 GB.")).toBeTruthy();
+    const stages = within(screen.getByRole("list", { name: "Scan stages" }))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(stages).toEqual([
+      "Temporary filesDone",
+      "App and browser cachesDone",
+      "Old logsDone",
+      "Developer tool cachesChecking",
+      "DockerWaiting",
+      "Large filesWaiting",
+    ]);
+  });
+
+  it("shows how long the scan has been running", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<App engine={fakeEngine({ scanRuns: true })} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+      expect(await screen.findByText(/^Running for /)).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(72_000);
+      });
+      expect(screen.getByText(/^Running for 1 minute 1[23] seconds$/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("results", () => {
+  it("the header says when the scan ran and offers Scan again in the same mode", async () => {
+    const engine = fakeEngine({
+      scan: finishedScan({
+        duration_ms: 90_900,
+        progress: { files_seen: 2_203_944, bytes_seen: 1, stage: "caches", detail: null },
+      }),
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    await screen.findByRole("heading", { name: "Results" });
+    expect(
+      screen.getByText(/^Scanned at .+ · took 1 minute 30 seconds · checked 2,203,944 files$/),
+    ).toBeTruthy();
+    const header = screen.getByRole("heading", { name: "Results" }).parentElement!;
+    fireEvent.click(within(header).getByRole("button", { name: "Scan again" }));
+    await waitFor(() => expect(engine.startScan).toHaveBeenCalledTimes(2));
+    expect(engine.startScan.mock.calls.map((c) => c[0])).toEqual(["deep", "deep"]);
+  });
+
   // Phase 7 tests 1 and 2.
   it("Select safe items checks only bulk-safe rows", async () => {
     await toResults();
@@ -140,7 +203,7 @@ describe("results", () => {
   // Phase 5 item 9.
   it("shows how long the scan took", async () => {
     await toResults();
-    expect(screen.getByText(/Scan took 0\.2 seconds/)).toBeTruthy();
+    expect(screen.getByText(/took less than a second/)).toBeTruthy();
   });
 
   it("risk is shown as a word, and skipped entries show their reason", async () => {
@@ -148,7 +211,7 @@ describe("results", () => {
     expect(screen.getAllByText("Low").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Medium").length).toBeGreaterThan(0);
     expect(screen.getByText("Info")).toBeTruthy();
-    expect(screen.getByText(/it changed within the last day/)).toBeTruthy();
+    expect(screen.getByText("Changed in the last day (1 item)")).toBeTruthy();
   });
 
   it("focus moves to the results heading", async () => {
@@ -245,7 +308,113 @@ describe("running and report", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
     await waitFor(() => expect(engine.stopRun).toHaveBeenCalledWith(11));
     // Progress arrives from the next poll, after the click, and must survive it.
-    expect(await screen.findByText("1 of 2 items done")).toBeTruthy();
+    expect(await screen.findByText(/^1 of 2 items done/)).toBeTruthy();
+  });
+});
+
+describe("live cleaning progress", () => {
+  it("shows the item in progress, its tool output, and finished items with a hint", async () => {
+    await toReview(fakeEngine({ runStays: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    const status = await screen.findByRole("status");
+    await waitFor(() => expect(status.textContent).toBe("Cleaning ~/.cache/uv."));
+    expect(screen.getByText("1 of 2 items done · 1 minute 2 seconds")).toBeTruthy();
+    expect(screen.getByText("Running for 41 seconds")).toBeTruthy();
+    const output = screen.getByLabelText("Output from ~/.cache/uv");
+    expect(output.textContent).toBe(
+      "Running /opt/homebrew/bin/uv cache clean\nClearing cache at: /Users/test/.cache/uv",
+    );
+    expect(output.getAttribute("tabindex")).toBe("0");
+    const finished = screen.getByRole("list", { name: "Finished items" });
+    expect(within(finished).getByText("~/.npm")).toBeTruthy();
+    expect(within(finished).getByText(/Skipped: the tool is busy/)).toBeTruthy();
+    expect(within(finished).getByText(/Let it finish or close it/)).toBeTruthy();
+    expect(screen.getByText("0 removed, 1 skipped, 0 failed")).toBeTruthy();
+  });
+
+  it("the report repeats a busy tool's hint", async () => {
+    const busy = {
+      ...REPORT.items[1],
+      candidate_id: 9,
+      catalog_id: "pkg-uv-cache",
+      display_name: "~/.cache/uv",
+      reason: "tool_busy",
+      detail: "the tool is busy with another process. Try again later",
+      hint: "Another uv program is using the cache. Close them, then run the cleanup again.",
+    };
+    await toReview(fakeEngine({ report: { ...REPORT, items: [REPORT.items[0], busy] } }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await screen.findByRole("heading", { name: "Report" });
+    const skipped = screen.getByRole("region", { name: "Skipped" });
+    expect(within(skipped).getByText(/Another uv program is using the cache/)).toBeTruthy();
+  });
+});
+
+describe("developer assets", () => {
+  async function toDeep() {
+    render(<App engine={fakeEngine({ scan: deepScan() })} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    await screen.findByRole("heading", { name: "Results" });
+  }
+
+  it("lists Docker volumes, images, containers, and the disk file for information only", async () => {
+    await toDeep();
+    const assets = screen.getByRole("region", { name: "Developer assets" });
+    expect(within(assets).getByText(/Information only/)).toBeTruthy();
+    expect(within(assets).queryAllByRole("checkbox")).toEqual([]);
+    expect(within(assets).queryByRole("button", { name: /Show in folder/ })).toBeNull();
+
+    const volumes = within(assets).getByRole("table", { name: "Docker volumes" });
+    const volumeRows = within(volumes)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.textContent);
+    expect(volumeRows).toEqual([
+      "example_db14.2 GB1 container",
+      "example_cache482 MBNot used by a container right now",
+      "Unnamed volume (dc487f67a881)0 bytesNot used by a container right now",
+    ]);
+    expect(within(assets).getByText(/Space Optimiser never removes them/)).toBeTruthy();
+
+    const images = within(assets).getByRole("table", { name: "Docker images" });
+    const first = within(images).getAllByRole("row")[1];
+    expect(first.textContent).toBe("example/backend:latest1.4 GB1.3 GB1");
+    expect(within(images).getByText("Untagged image")).toBeTruthy();
+
+    const containers = within(assets).getByRole("table", { name: "Docker containers" });
+    expect(within(containers).getByText("example-backend-1")).toBeTruthy();
+    expect(within(containers).getByText("Running (Up 25 minutes)")).toBeTruthy();
+
+    expect(within(assets).getByText(/uses 30.6 GB on disk/)).toBeTruthy();
+    expect(within(assets).getByText(/never deletes it/)).toBeTruthy();
+  });
+
+  it("the tool cache table says which caches are offered and why others are not", async () => {
+    await toDeep();
+    const assets = screen.getByRole("region", { name: "Developer assets" });
+    const table = within(assets).getByRole("table", { name: "Developer tool caches" });
+    const rows = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.textContent);
+    expect(rows).toContain("pnpm store~/Library/pnpm/store/v3Up to 3.0 MBOffered");
+    expect(rows).toContain("pip cache~/Library/Caches/pipUp to 1.0 MBNot offered: not sure");
+    expect(rows).toContain("Docker build cacheDocker did not respond.");
+  });
+
+  it("the chip shows only the assets and selection totals ignore them", async () => {
+    await toDeep();
+    const categories = within(screen.getByRole("group", { name: "Categories" }));
+    fireEvent.click(categories.getByRole("button", { name: "Developer assets" }));
+    expect(screen.getByRole("region", { name: "Developer assets" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Temporary files" })).toBeNull();
+    expect(screen.getByText(/0 items selected, about 0 bytes/)).toBeTruthy();
+  });
+
+  it("a normal scan has no Developer assets", async () => {
+    await toResults();
+    expect(screen.queryByRole("region", { name: "Developer assets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Developer assets" })).toBeNull();
   });
 });
 
@@ -326,9 +495,11 @@ describe("deep scan", () => {
           catalog_id: "pkg-pnpm-store",
           display_name: "~/Library/pnpm/store/v3",
           outcome: "ran" as const,
+          reason: null,
           detail: null,
           bytes_removed: 0,
           recovery_text: "The next install will download packages again.",
+          hint: null,
         },
       ],
     };
@@ -658,6 +829,78 @@ describe("about and help", () => {
 });
 
 // Categories, filters, folded groups, and the sticky action bar.
+describe("readable temporary files and Left alone", () => {
+  const temp = (id: number, display_name: string, over = {}) => ({
+    ...CANDIDATES[0],
+    id,
+    display_name,
+    estimated_bytes: 5000,
+    kind: "folder" as const,
+    age_days: 3,
+    file_count: 12,
+    ...over,
+  });
+  const scanWith = () =>
+    finishedScan({
+      candidates: [
+        temp(40, "com.apple.avconferenced"),
+        temp(41, ".com.openai.codex.9XF9pN", { kind: "file", file_count: 1, age_days: 1 }),
+        temp(42, ".tmpOJTzZZ", { estimated_bytes: 0 }),
+        temp(43, "com.apple.ThreadCommissionerService", { estimated_bytes: 0 }),
+        temp(44, "installer-log", { age_days: 90 }),
+      ],
+      skipped: [
+        { display_name: "fresh-1", reason: "fresh", detail: "it changed within the last day" },
+        { display_name: "fresh-2", reason: "fresh", detail: "it changed within the last day" },
+        { display_name: "my-repo", reason: "project", detail: "it looks like a project folder" },
+      ],
+    });
+
+  it("groups temporary rows by source and says what each row is", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    const group = screen.getByRole("region", { name: "Temporary files" });
+    const headings = within(group)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(headings).toEqual(["App temporary folders", "macOS system services", "Other"]);
+    expect(within(group).getByText("File · 1 day old")).toBeTruthy();
+    expect(within(group).getByText("Folder, 12 files · 3 months old")).toBeTruthy();
+  });
+
+  it("folds empty items into one line that Select safe items still selects", async () => {
+    const engine = await toResults(fakeEngine({ scan: scanWith() }));
+    expect(screen.queryByText(".tmpOJTzZZ")).toBeNull();
+    const fold = screen.getByRole("button", { name: "Show 2 empty items (0 bytes)" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
+    expect(screen.getByText(/5 items selected/)).toBeTruthy();
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(box(".tmpOJTzZZ").checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    expect(engine.buildPlan.mock.calls[0][1]).toEqual(expect.arrayContaining([42, 43]));
+  });
+
+  it("the name filter finds a folded empty item", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    fireEvent.change(screen.getByLabelText("Filter by name"), { target: { value: "tmpOJ" } });
+    expect(screen.getByText(".tmpOJTzZZ")).toBeTruthy();
+  });
+
+  it("Left alone groups items by reason with a plain explanation", async () => {
+    await toResults(fakeEngine({ scan: scanWith() }));
+    const left = screen.getByText("Left alone (3 items)").closest("details")!;
+    const reasons = within(left)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(reasons).toEqual(["Changed in the last day (2 items)", "Looks like a project (1 item)"]);
+    expect(within(left).getByText(/Nothing here is removed/)).toBeTruthy();
+    expect(within(left).getByText(/may be your own work/)).toBeTruthy();
+    expect(within(left).getByText("my-repo")).toBeTruthy();
+  });
+});
+
 describe("categories and long lists", () => {
   function manyTemp(count: number) {
     return Array.from({ length: count }, (_, i) => ({

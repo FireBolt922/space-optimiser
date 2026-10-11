@@ -10,6 +10,7 @@ import {
   type InterruptedRun,
   type Plan,
   type Report,
+  type RunView,
   type ScanMode,
   type ScanView,
 } from "./engine";
@@ -49,7 +50,14 @@ type Screen =
       token: string;
       diskFull: boolean;
     }
-  | { kind: "running"; planId: number; done: number; total: number; stopping: boolean }
+  | {
+      kind: "running";
+      planId: number;
+      done: number;
+      total: number;
+      stopping: boolean;
+      run?: RunView;
+    }
   | { kind: "report"; report: Report };
 
 export default function App({ engine }: { engine: Engine }) {
@@ -62,6 +70,13 @@ export default function App({ engine }: { engine: Engine }) {
   const [theme, setTheme] = useTheme();
   const main = useRef<HTMLElement>(null);
   const shownView = useRef(view);
+  // The last scan's mode and times, for the clock, the Results header, and
+  // Scan again (which reruns the same mode).
+  const [lastScan, setLastScan] = useState<{
+    mode: ScanMode;
+    startedAt: number;
+    finishedAt?: number;
+  }>({ mode: "deep", startedAt: 0 });
 
   useEffect(() => {
     engine.interruptedRun().then(setInterrupted, () => setInterrupted(null));
@@ -79,6 +94,7 @@ export default function App({ engine }: { engine: Engine }) {
     async (mode: ScanMode) => {
       try {
         const scanId = await engine.startScan(mode);
+        setLastScan({ mode, startedAt: Date.now() });
         setScreen({ kind: "scanning", scanId, cancelling: false });
       } catch (e) {
         setScreen({ kind: "start", notice: errorMessage(e) });
@@ -100,6 +116,8 @@ export default function App({ engine }: { engine: Engine }) {
           setScreen((s) => (s.kind === "scanning" ? { ...s, view } : s));
           timer = setTimeout(tick, POLL_MS);
         } else if (view.status === "finished") {
+          const finishedAt = Date.now();
+          setLastScan((last) => ({ ...last, finishedAt }));
           setScreen({ kind: "results", scan: view, selected: [] });
         } else if (view.status === "cancelled") {
           setScreen({ kind: "start", notice: "The scan was cancelled." });
@@ -130,7 +148,7 @@ export default function App({ engine }: { engine: Engine }) {
           setScreen({ kind: "report", report: run.report });
         } else {
           setScreen((s) =>
-            s.kind === "running" ? { ...s, done: run.items_done, total: run.items_total } : s,
+            s.kind === "running" ? { ...s, done: run.items_done, total: run.items_total, run } : s,
           );
           timer = setTimeout(tick, POLL_MS);
         }
@@ -236,7 +254,12 @@ export default function App({ engine }: { engine: Engine }) {
         />
       )}
       {screen.kind === "scanning" && (
-        <Scanning view={screen.view} cancelling={screen.cancelling} onCancel={cancelScan} />
+        <Scanning
+          view={screen.view}
+          startedAt={lastScan.startedAt}
+          cancelling={screen.cancelling}
+          onCancel={cancelScan}
+        />
       )}
       {screen.kind === "results" && (
         <Results
@@ -244,7 +267,8 @@ export default function App({ engine }: { engine: Engine }) {
           selected={screen.selected}
           onSelect={(selected) => setScreen({ ...screen, selected })}
           onReview={() => review(screen.scan, screen.selected)}
-          onScanAgain={() => setScreen({ kind: "start" })}
+          finishedAt={lastScan.finishedAt ?? null}
+          onScanAgain={() => startScan(lastScan.mode)}
           onReveal={(id) => engine.reveal(id)}
         />
       )}
@@ -256,7 +280,7 @@ export default function App({ engine }: { engine: Engine }) {
           error={screen.error}
           onBack={() => backToResults(screen.scan, screen.selected)}
           onConfirm={confirm}
-          onScanAgain={() => setScreen({ kind: "start" })}
+          onScanAgain={() => startScan(lastScan.mode)}
         />
       )}
       {screen.kind === "audit" && (
@@ -267,7 +291,13 @@ export default function App({ engine }: { engine: Engine }) {
         />
       )}
       {screen.kind === "running" && (
-        <Running done={screen.done} total={screen.total} stopping={screen.stopping} onStop={stop} />
+        <Running
+          done={screen.done}
+          total={screen.total}
+          run={screen.run}
+          stopping={screen.stopping}
+          onStop={stop}
+        />
       )}
       {screen.kind === "report" && (
         <ReportScreen

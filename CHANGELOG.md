@@ -7,6 +7,37 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- The Scanning screen says which part of the scan is running (for example
+  "Asking uv where its cache is."), lists every stage as Done, Checking, or
+  Waiting, and shows how long the scan has been running.
+- Results has Scan again at the top as well, and says when the scan ran and
+  how long it took.
+- Temporary files are grouped by where they came from (app folders, macOS
+  system services, unnamed scratch files, other). Each row says whether it is
+  a file or a folder and how old it is, and empty items fold into one line.
+- "Left alone" groups skipped items by reason, with a sentence on why each
+  reason keeps an item out.
+
+- The Cleaning screen shows the item in progress and how long it has run,
+  the lines a tool such as uv prints (starting with the exact command and the
+  uv it runs), each finished item with its outcome, and counts. A tool that
+  is busy because another process holds its cache says what to close.
+
+- Deep Scan adds an information-only "Developer assets" section: Docker
+  volumes (with how many containers use each), images, containers, the size
+  of Docker Desktop's disk file, and a table of the developer tool caches
+  the scan looked at with whether each was offered. Nothing in it can be
+  selected or removed.
+
+### Changed
+
+- Scan again reruns the same scan mode instead of returning to the start
+  screen.
+- Large counts are written with thousands separators.
+- The progress bar uses the app's colours instead of the system's light grey.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added

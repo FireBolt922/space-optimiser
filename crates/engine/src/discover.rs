@@ -9,14 +9,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
 use crate::docker;
 use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{
-    Action, Candidate, CandidateId, Confidence, Label, Note, Platform, ScanMode, Scope, ToolAction,
+    Action, Candidate, CandidateId, Confidence, DevAssets, DockerAssets, EntryKind, Label, Note,
+    Platform, ScanMode, Scope, ToolAction,
 };
 pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
@@ -41,11 +42,51 @@ impl CancelToken {
     }
 }
 
-/// Sent at least every 200 ms or 1,000 files, whichever comes first.
+/// Sent at least every 200 ms or 1,000 files, whichever comes first, and
+/// whenever the scan moves to another stage or tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Progress {
     pub files_seen: u64,
     pub bytes_seen: u64,
+    pub stage: Stage,
+    /// The tool a [`Stage::Tools`] row is asking, such as `uv`.
+    pub detail: Option<&'static str>,
+}
+
+impl Progress {
+    pub const START: Progress = Progress {
+        files_seen: 0,
+        bytes_seen: 0,
+        stage: Stage::Temp,
+        detail: None,
+    };
+}
+
+/// A part of a scan, in the order the scan runs them. The UI names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Temp,
+    Caches,
+    Logs,
+    Tools,
+    Docker,
+    LargeFiles,
+}
+
+/// The stages `mode` runs, in order.
+pub fn stages(mode: ScanMode) -> Vec<Stage> {
+    match mode {
+        ScanMode::Normal => vec![Stage::Temp, Stage::Caches],
+        ScanMode::Deep => vec![
+            Stage::Temp,
+            Stage::Caches,
+            Stage::Logs,
+            Stage::Tools,
+            Stage::Docker,
+            Stage::LargeFiles,
+        ],
+    }
 }
 
 const PROGRESS_FILES: u64 = 1_000;
@@ -254,6 +295,8 @@ pub struct Scan {
     pub cache_skipped: Vec<Skipped>,
     /// What rows found that is not a candidate.
     pub notes: Vec<Note>,
+    /// Deep Scan only: information for developers, never offered.
+    pub dev_assets: Option<DevAssets>,
     pub progress: Progress,
 }
 
@@ -298,9 +341,11 @@ pub fn scan(
         caches: Vec::new(),
         cache_skipped: Vec::new(),
         notes: Vec::new(),
+        dev_assets: None,
         progress: walk.progress,
     };
     let mut seen = HashSet::new();
+    walk.stage(Stage::Caches, None);
     let rows: &[CatalogId] = match mode {
         ScanMode::Normal => &CACHE_ROWS,
         ScanMode::Deep => &DEEP_CACHE_ROWS,
@@ -333,13 +378,18 @@ pub fn scan(
         }
     }
     if mode == ScanMode::Deep {
+        walk.stage(Stage::Logs, None);
         walk.logs(&mut out)?;
         for spec in &TOOL_ROWS {
             walk.check_cancel()?;
+            walk.stage(Stage::Tools, spec.names.first().copied());
             walk.tool_row(spec, &mut out)?;
         }
         walk.check_cancel()?;
-        walk.docker(&mut out);
+        walk.stage(Stage::Docker, None);
+        let docker = walk.docker(&mut out)?;
+        out.dev_assets = Some(DevAssets { docker });
+        walk.stage(Stage::LargeFiles, None);
         walk.large_files(&mut out)?;
     }
     out.progress = walk.progress;
@@ -378,6 +428,8 @@ struct Summary {
     /// Everything inside the entry, links included. The executor deletes
     /// only these.
     members: Vec<FileId>,
+    /// The newest age timestamp of the entry and everything inside it.
+    newest: Option<SystemTime>,
 }
 
 impl Summary {
@@ -389,6 +441,7 @@ impl Summary {
             shared: false,
             exact,
             members: Vec::new(),
+            newest: None,
         }
     }
 }
@@ -412,17 +465,25 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             ctx,
             cancel,
             on_progress,
-            progress: Progress {
-                files_seen: 0,
-                bytes_seen: 0,
-            },
+            progress: Progress::START,
             since_event: 0,
             last_event: Instant::now(),
             next_id: 1,
         }
     }
 
+    /// Moves to `stage` and says so at once: a tool or Docker can keep the
+    /// scan waiting without a single file tick.
+    fn stage(&mut self, stage: Stage, detail: Option<&'static str>) {
+        self.progress.stage = stage;
+        self.progress.detail = detail;
+        (self.on_progress)(self.progress);
+        self.since_event = 0;
+        self.last_event = Instant::now();
+    }
+
     fn temp_roots(&mut self) -> std::result::Result<Vec<RootOutcome>, ScanError> {
+        self.stage(Stage::Temp, None);
         let ctx = self.ctx;
         let mut seen = HashSet::new();
         let mut roots = Vec::new();
@@ -568,7 +629,15 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                         file_id: facts.id,
                         scope: Scope::Entry,
                     };
-                    candidates.push(self.candidate(row, target, display_name, summary));
+                    let age_days = summary.newest.and_then(|t| age_days(self.ctx.now(), t));
+                    let mut candidate = self.candidate(row, target, display_name, summary);
+                    candidate.kind = Some(if facts.kind == Kind::Dir {
+                        EntryKind::Folder
+                    } else {
+                        EntryKind::File
+                    });
+                    candidate.age_days = age_days;
+                    candidates.push(candidate);
                 }
             }
         }
@@ -752,14 +821,22 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
 
     /// `docker-build-cache`: one candidate for the build cache Docker
     /// reports, or one note saying why not.
-    fn docker(&mut self, out: &mut Scan) {
+    /// `docker-build-cache`, then the information-only Docker assets: the
+    /// lists from `docker system df -v` when the build-cache checks passed,
+    /// and Docker Desktop's disk file when it exists.
+    fn docker(&mut self, out: &mut Scan) -> std::result::Result<Option<DockerAssets>, ScanError> {
         let row = CatalogId::DockerBuildCache;
+        let disk_file = docker::disk_file(self.ctx);
+        let mut assets = disk_file.map(|disk| DockerAssets {
+            disk_file: Some(disk),
+            ..DockerAssets::default()
+        });
         let tool = match tool::find(self.ctx, "docker") {
             Ok(tool) => tool,
-            Err(NotFound::Missing) => return,
+            Err(NotFound::Missing) => return Ok(assets),
             Err(reason) => {
                 note(out, row, format!("docker: {reason}."), None);
-                return;
+                return Ok(assets);
             }
         };
         match docker::status(self.ctx, &tool) {
@@ -771,38 +848,55 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                 if let Some(bytes) = volumes.filter(|b| *b > 0) {
                     note(out, row, VOLUMES.to_owned(), Some(bytes));
                 }
-                if reclaimable == 0 {
-                    return;
+                self.build_cache(out, reclaimable, &tool);
+                let found = assets.get_or_insert_with(DockerAssets::default);
+                match docker::details(self.ctx, &tool, self.cancel) {
+                    docker::Details::Listed(lists) => {
+                        found.images = lists.images;
+                        found.containers = lists.containers;
+                        found.volumes = lists.volumes;
+                    }
+                    docker::Details::Note(text) => found.note = Some(text.to_owned()),
+                    docker::Details::Cancelled => return Err(ScanError::Cancelled),
                 }
-                let home = self.ctx.home();
-                let Ok(home_id) = measure::file_id(home) else {
-                    return;
-                };
-                let target = Target {
-                    root: None,
-                    path: home,
-                    file_id: home_id,
-                    scope: Scope::Tool,
-                };
-                let found_by = format!(
-                    "Size from `docker system df`; docker {}.",
-                    tool.found_text(home)
-                );
-                let mut candidate = self.candidate(
-                    row,
-                    target,
-                    "Docker build cache".to_owned(),
-                    Summary::empty(true),
-                );
-                candidate.upper_bound_bytes = Some(reclaimable);
-                candidate.found_by = Some(found_by);
-                candidate.tool = Some(ToolAction {
-                    tool,
-                    args: docker::PRUNE,
-                });
-                out.caches.push(candidate);
             }
         }
+        Ok(assets)
+    }
+
+    /// The build-cache candidate, with Docker's reclaimable number.
+    fn build_cache(&mut self, out: &mut Scan, reclaimable: u64, tool: &Tool) {
+        let row = CatalogId::DockerBuildCache;
+        if reclaimable == 0 {
+            return;
+        }
+        let home = self.ctx.home();
+        let Ok(home_id) = measure::file_id(home) else {
+            return;
+        };
+        let target = Target {
+            root: None,
+            path: home,
+            file_id: home_id,
+            scope: Scope::Tool,
+        };
+        let found_by = format!(
+            "Size from `docker system df`; docker {}.",
+            tool.found_text(home)
+        );
+        let mut candidate = self.candidate(
+            row,
+            target,
+            "Docker build cache".to_owned(),
+            Summary::empty(true),
+        );
+        candidate.upper_bound_bytes = Some(reclaimable);
+        candidate.found_by = Some(found_by);
+        candidate.tool = Some(ToolAction {
+            tool: tool.clone(),
+            args: docker::PRUNE,
+        });
+        out.caches.push(candidate);
     }
 
     /// `large-files-report` (phase 6 item 9): the largest files in the
@@ -958,6 +1052,8 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             upper_bound_bytes: None,
             found_by: None,
             covers: Vec::new(),
+            kind: None,
+            age_days: None,
             file_count: s.files,
             links_not_followed: s.links,
             labels,
@@ -1006,12 +1102,14 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             let bytes = if shared { 0 } else { facts.size.bytes };
             self.tick(bytes);
             let mut summary = Summary::empty(facts.size.exact);
+            summary.newest = Some(newest(&facts));
             summary.files = 1;
             summary.bytes = bytes;
             summary.shared = shared;
             return Ok(Verdict::Keep(facts, summary));
         }
         let mut summary = Summary::empty(facts.size.exact);
+        summary.newest = Some(newest(&facts));
         if count_self {
             summary.bytes = facts.size.bytes;
         }
@@ -1049,6 +1147,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
                 }
                 summary.members.push(child_facts.id);
                 summary.exact &= child_facts.size.exact;
+                summary.newest = summary.newest.max(Some(newest(&child_facts)));
                 if child_facts.kind == Kind::Dir {
                     summary.bytes += child_facts.size.bytes;
                     stack.push(child);
@@ -1103,6 +1202,17 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             self.last_event = Instant::now();
         }
     }
+}
+
+/// The newer of an entry's two age timestamps (see [`policy::is_old`]).
+fn newest(facts: &Facts) -> SystemTime {
+    facts.times.0.max(facts.times.1)
+}
+
+/// Whole days from `newest` to `now`; none for a timestamp in the future.
+fn age_days(now: SystemTime, newest: SystemTime) -> Option<u32> {
+    let age = now.duration_since(newest).ok()?;
+    u32::try_from(age.as_secs() / 86_400).ok()
 }
 
 fn note(out: &mut Scan, row: CatalogId, text: String, bytes: Option<u64>) {

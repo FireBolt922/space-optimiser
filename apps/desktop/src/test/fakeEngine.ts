@@ -3,12 +3,14 @@ import { vi } from "vitest";
 import type {
   AppInfo,
   Candidate,
+  DevAssets,
   Engine,
   EngineError,
   ExecuteStart,
   InterruptedRun,
   Plan,
   Report,
+  RunView,
   ScanView,
 } from "../engine";
 
@@ -23,6 +25,8 @@ function candidate(over: Partial<Candidate> & Pick<Candidate, "id" | "display_na
     upper_bound_bytes: null,
     found_by: null,
     covers: [],
+    kind: null,
+    age_days: null,
     file_count: 1,
     links_not_followed: 0,
     labels: [],
@@ -135,9 +139,62 @@ export const DEEP_CANDIDATES: Candidate[] = [
   }),
 ];
 
+export const DEV_ASSETS: DevAssets = {
+  docker: {
+    images: [
+      {
+        repository: "example/worker",
+        tag: "check",
+        size_bytes: 955_000_000,
+        unique_bytes: 795_800_000,
+        containers: 0,
+      },
+      {
+        repository: "example/backend",
+        tag: "latest",
+        size_bytes: 1_400_000_000,
+        unique_bytes: 1_291_000_000,
+        containers: 1,
+      },
+      {
+        repository: "<none>",
+        tag: "<none>",
+        size_bytes: 754_000_000,
+        unique_bytes: 753_800_000,
+        containers: 0,
+      },
+    ],
+    containers: [
+      {
+        name: "example-backend-1",
+        image: "example/backend:latest",
+        state: "running",
+        status: "Up 25 minutes",
+        size_bytes: 57_300,
+      },
+    ],
+    volumes: [
+      { name: "example_db", size_bytes: 14_200_000_000, in_use_by: 1 },
+      { name: "example_cache", size_bytes: 482_000_000, in_use_by: 0 },
+      {
+        name: "dc487f67a8810ad2570e670787bbda542c3fdd4fce4ddfd02c57293ef3ba59cf",
+        size_bytes: 0,
+        in_use_by: 0,
+      },
+    ],
+    disk_file: {
+      location_label: "~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+      allocated_bytes: 30_600_000_000,
+      logical_bytes: 1_099_511_627_776,
+    },
+    note: null,
+  },
+};
+
 export function deepScan(): ScanView {
   return finishedScan({
     candidates: DEEP_CANDIDATES,
+    dev_assets: DEV_ASSETS,
     notes: [
       {
         catalog_id: "docker-build-cache",
@@ -159,7 +216,8 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
   return {
     scan_id: 7,
     status: "finished",
-    progress: { files_seen: 12, bytes_seen: 3 * 1024 * 1024 },
+    stages: ["temp", "caches"],
+    progress: { files_seen: 12, bytes_seen: 3 * 1024 * 1024, stage: "caches", detail: null },
     duration_ms: 240,
     error: null,
     candidates: CANDIDATES,
@@ -168,6 +226,7 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
     ],
     roots: [{ location_label: "Temporary files", skipped: null, frees_memory: false }],
     notes: [],
+    dev_assets: null,
     ...over,
   };
 }
@@ -206,18 +265,22 @@ export const REPORT: Report = {
       catalog_id: "user-temp",
       display_name: "old-download.bin",
       outcome: "removed",
+      reason: null,
       detail: null,
       bytes_removed: 2 * 1024 * 1024,
       recovery_text: "Files older than a day were removed from the temporary folder.",
+      hint: null,
     },
     {
       candidate_id: 2,
       catalog_id: "user-temp",
       display_name: XSS_NAME,
       outcome: "skipped",
+      reason: "changed_since_scan",
       detail: "it changed since the scan",
       bytes_removed: 0,
       recovery_text: null,
+      hint: null,
     },
   ],
   bytes_removed: 2 * 1024 * 1024,
@@ -235,6 +298,40 @@ export const REPORT: Report = {
   memory_log: [],
 };
 
+/** A run on its second item: npm was busy, uv is printing. */
+export const RUNNING: RunView = {
+  plan_id: 11,
+  status: "running",
+  items_done: 1,
+  items_total: 2,
+  elapsed_ms: 62_000,
+  current: {
+    index: 1,
+    display_name: "~/.cache/uv",
+    catalog_id: "pkg-uv-cache",
+    elapsed_ms: 41_000,
+    output: [
+      "Running /opt/homebrew/bin/uv cache clean",
+      "Clearing cache at: /Users/test/.cache/uv",
+    ],
+  },
+  recent: [
+    {
+      candidate_id: 30,
+      catalog_id: "pkg-npm-cache",
+      display_name: "~/.npm",
+      outcome: "skipped",
+      reason: "tool_busy",
+      detail: "the tool is busy with another process. Try again later",
+      bytes_removed: 0,
+      recovery_text: null,
+      hint: "Another install is using the cache. Let it finish or close it, then run the cleanup again.",
+    },
+  ],
+  counts: { removed: 0, skipped: 1, failed: 0 },
+  report: null,
+};
+
 export const APP_INFO: AppInfo = {
   version: "0.1.0",
   platform: "macos",
@@ -246,6 +343,9 @@ export interface FakeOptions {
   scan?: ScanView;
   /** The scan stays "running" until it is cancelled. */
   scanRuns?: boolean;
+  /** Progress a running scan reports. */
+  scanProgress?: ScanView["progress"];
+  scanStages?: ScanView["stages"];
   execute?: ExecuteStart[];
   confirmError?: { kind: string; message: string };
   interrupted?: InterruptedRun | null;
@@ -260,7 +360,7 @@ export function fakeEngine(options: FakeOptions = {}) {
   let cancelled = false;
   const executes = [...(options.execute ?? [{ status: "started" as const }])];
   const engine = {
-    startScan: vi.fn(async () => 7),
+    startScan: vi.fn<Engine["startScan"]>(async () => 7),
     cancelScan: vi.fn(async () => {
       cancelled = true;
     }),
@@ -268,6 +368,13 @@ export function fakeEngine(options: FakeOptions = {}) {
       if (options.scanRuns) {
         return finishedScan({
           status: cancelled ? "cancelled" : "running",
+          progress: options.scanProgress ?? {
+            files_seen: 0,
+            bytes_seen: 0,
+            stage: "temp",
+            detail: null,
+          },
+          stages: options.scanStages ?? ["temp", "caches"],
           candidates: [],
           skipped: [],
           roots: [],
@@ -281,14 +388,18 @@ export function fakeEngine(options: FakeOptions = {}) {
       return "token-1";
     }),
     executePlan: vi.fn(async () => executes.shift() ?? { status: "started" as const }),
-    getRun: vi.fn(async () =>
+    getRun: vi.fn(async (): Promise<RunView> =>
       options.runStays
-        ? { plan_id: 11, status: "running" as const, items_done: 1, items_total: 2, report: null }
+        ? RUNNING
         : {
             plan_id: 11,
-            status: "finished" as const,
+            status: "finished",
             items_done: 2,
             items_total: 2,
+            elapsed_ms: 3000,
+            current: null,
+            recent: [],
+            counts: { removed: 1, skipped: 1, failed: 0 },
             report: options.report ?? REPORT,
           },
     ),

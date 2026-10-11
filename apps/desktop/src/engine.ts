@@ -21,6 +21,10 @@ export interface Candidate {
   found_by: string | null;
   /** Candidates this one removes too; selecting both counts them once. */
   covers: number[];
+  /** File or folder, for a top-level temp or log entry; null for other rows. */
+  kind: "file" | "folder" | null;
+  /** Whole days since the entry or anything in it changed (temp and log rows). */
+  age_days: number | null;
   file_count: number;
   links_not_followed: number;
   labels: ("shared" | "logical_size" | "quit_first")[];
@@ -53,16 +57,64 @@ export interface Note {
   bytes: number | null;
 }
 
+/** A part of a scan, in the order the engine runs them. */
+export type ScanStage = "temp" | "caches" | "logs" | "tools" | "docker" | "large_files";
+
+export interface DockerImage {
+  repository: string;
+  tag: string;
+  size_bytes: number | null;
+  /** Space only this image uses. */
+  unique_bytes: number | null;
+  containers: number | null;
+}
+
+export interface DockerContainer {
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  size_bytes: number | null;
+}
+
+export interface DockerVolume {
+  name: string;
+  size_bytes: number | null;
+  /** Containers that use it, running or not. */
+  in_use_by: number | null;
+}
+
+/** Information only: nothing here has an id, so nothing can be selected. */
+export interface DevAssets {
+  docker: {
+    images: DockerImage[];
+    containers: DockerContainer[];
+    volumes: DockerVolume[];
+    disk_file: { location_label: string; allocated_bytes: number; logical_bytes: number } | null;
+    note: string | null;
+  } | null;
+}
+
 export interface ScanView {
   scan_id: number;
   status: "running" | "finished" | "cancelled" | "failed";
-  progress: { files_seen: number; bytes_seen: number };
+  /** The stages this scan runs, in order; `progress.stage` is the current one. */
+  stages: ScanStage[];
+  progress: {
+    files_seen: number;
+    bytes_seen: number;
+    stage: ScanStage;
+    /** The tool a "tools" stage is asking, such as `uv`. */
+    detail: string | null;
+  };
   duration_ms: number;
   error: string | null;
   candidates: Candidate[];
   skipped: SkippedView[];
   roots: RootView[];
   notes: Note[];
+  /** Deep Scan only. */
+  dev_assets: DevAssets | null;
 }
 
 export interface PlanItem {
@@ -93,9 +145,13 @@ export interface ReportItem {
   catalog_id: string;
   display_name: string;
   outcome: "removed" | "ran" | "skipped" | "failed" | "not_run";
+  /** Why the item was skipped, as the engine's code (`tool_busy`, ...). */
+  reason: string | null;
   detail: string | null;
   bytes_removed: number;
   recovery_text: string | null;
+  /** What to do about a busy tool, for an item skipped as `tool_busy`. */
+  hint: string | null;
 }
 
 export interface FreeSpace {
@@ -116,11 +172,26 @@ export interface Report {
   memory_log: string[];
 }
 
+/** The item a run is working on now. */
+export interface CurrentItem {
+  index: number;
+  display_name: string;
+  catalog_id: string;
+  elapsed_ms: number;
+  /** The last lines its tool printed; the first names the command. Empty for deletes. */
+  output: string[];
+}
+
 export interface RunView {
   plan_id: number;
   status: "running" | "finished";
   items_done: number;
   items_total: number;
+  elapsed_ms: number;
+  current: CurrentItem | null;
+  /** The most recently finished items, newest last. */
+  recent: ReportItem[];
+  counts: { removed: number; skipped: number; failed: number };
   report: Report | null;
 }
 

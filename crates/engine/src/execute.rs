@@ -29,7 +29,7 @@ use crate::model::{
 };
 use crate::policy::{self, CatalogId, Context, ValidRoot};
 use crate::roots;
-use crate::tool::{self, Exit};
+use crate::tool::{self, Exit, LineSink};
 
 /// Whether this build has a handle-relative delete executor for the target
 /// platform. The engine refuses to execute a plan when it is false. Unix
@@ -161,8 +161,21 @@ pub(crate) struct Measure<'a> {
     pub settle: Duration,
 }
 
+/// What the executor says while it runs, for the Cleaning screen.
+pub(crate) enum RunEvent<'a> {
+    /// Entry `index` is starting.
+    Started { index: usize, entry: &'a PlanEntry },
+    /// Entry `index` is done; `item` is its report line.
+    Finished { index: usize, item: &'a ReportItem },
+}
+
+/// Receives each line a tool prints, with the index of its entry. Called
+/// from the tool's pipe reader threads.
+pub(crate) type OutputSink = Arc<dyn Fn(usize, String) + Send + Sync>;
+
 /// Runs every entry in order. Stop finishes the current entry and marks the
 /// rest "not run". Errors are recorded and the run continues.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     ctx: &Context,
     plan: PlanId,
@@ -170,7 +183,8 @@ pub(crate) fn run(
     mut audit: Audit,
     stop: &CancelToken,
     measure: Measure<'_>,
-    mut after_item: impl FnMut(usize),
+    mut on_event: impl FnMut(RunEvent<'_>),
+    output: Option<OutputSink>,
 ) -> Report {
     let mut volumes: Vec<(Option<u64>, &Path, &'static str, Option<u64>)> = Vec::new();
     for entry in entries {
@@ -186,9 +200,15 @@ pub(crate) fn run(
         let done = if stop.is_cancelled() {
             Done::not_run()
         } else {
+            on_event(RunEvent::Started { index, entry });
             match &entry.work {
                 Work::Delete { .. } => delete_entry(ctx, entry),
-                Work::Tool { action, cache, .. } => run_tool(ctx, entry.catalog_id, action, *cache),
+                Work::Tool { action, cache, .. } => {
+                    let lines = output
+                        .clone()
+                        .map(|output| -> LineSink { Arc::new(move |line| output(index, line)) });
+                    run_tool(ctx, entry.catalog_id, action, *cache, lines)
+                }
             }
         };
         audit.action(
@@ -199,6 +219,9 @@ pub(crate) fn run(
             done.bytes,
         );
         let finished = matches!(done.outcome, Outcome::Removed | Outcome::Ran);
+        let hint = (done.reason == Some(SkipCause::ToolBusy))
+            .then(|| entry.catalog_id.busy_hint())
+            .flatten();
         items.push(ReportItem {
             candidate_id: entry.candidate_id,
             catalog_id: entry.catalog_id,
@@ -208,8 +231,12 @@ pub(crate) fn run(
             detail: done.detail,
             bytes_removed: done.bytes,
             recovery_text: finished.then(|| entry.catalog_id.recovery_text()).flatten(),
+            hint,
         });
-        after_item(index + 1);
+        on_event(RunEvent::Finished {
+            index,
+            item: &items[index],
+        });
     }
 
     let removed = items
@@ -308,7 +335,13 @@ impl Done {
 /// arguments, the same tool file the scan found, the same cache folder the
 /// tool reported at scan time (asked again now), and for Docker a local
 /// endpoint checked again now.
-fn run_tool(ctx: &Context, row: CatalogId, action: &ToolAction, cache: Option<FileId>) -> Done {
+fn run_tool(
+    ctx: &Context,
+    row: CatalogId,
+    action: &ToolAction,
+    cache: Option<FileId>,
+    lines: Option<LineSink>,
+) -> Done {
     let Some((args, stop_on)) = crate::discover::tool_action(row) else {
         return Done::skipped(SkipCause::NotInThisBuild);
     };
@@ -325,11 +358,19 @@ fn run_tool(ctx: &Context, row: CatalogId, action: &ToolAction, cache: Option<Fi
         return Done::skipped(SkipCause::DockerNotLocal);
     }
     let timeout = ctx.tools().action_timeout;
-    match tool::run(ctx, &action.tool, args, timeout, stop_on) {
+    if let Some(lines) = &lines {
+        lines(format!(
+            "Running {} {}",
+            action.tool.path.display(),
+            args.join(" ")
+        ));
+    }
+    match tool::run_with_lines(ctx, &action.tool, args, timeout, stop_on, lines, None) {
         Ok(out) => match out.exit {
             Exit::Success => Done::ran(),
             Exit::Stopped(_) => Done::skipped(SkipCause::ToolBusy),
-            Exit::TimedOut => Done::failed(
+            // The executor passes no cancel token; Stop waits for the item.
+            Exit::TimedOut | Exit::Cancelled => Done::failed(
                 format!(
                     "{} did not finish in time and was stopped",
                     action.tool.name
@@ -705,6 +746,7 @@ mod tests {
                 settle: Duration::ZERO,
             },
             |_| {},
+            None,
         );
         assert_eq!(report.items[0].outcome, Outcome::Skipped);
         assert_eq!(report.items[0].reason, Some(SkipCause::NotInThisBuild));
@@ -752,6 +794,7 @@ mod tests {
                 settle: Duration::ZERO,
             },
             |_| {},
+            None,
         );
         for item in &report.items {
             assert_eq!(item.reason, Some(SkipCause::NotInThisBuild));

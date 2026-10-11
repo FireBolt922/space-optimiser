@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::discover::Progress;
+use crate::discover::{Progress, Stage};
 use crate::measure::FileId;
 use crate::policy::{CatalogId, RootRejection, SkipReason, ValidRoot};
 use crate::tool::Tool;
@@ -185,6 +185,14 @@ pub(crate) struct ToolAction {
     pub args: &'static [&'static str],
 }
 
+/// What a top-level temp or log entry is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    File,
+    Folder,
+}
+
 /// A scan result (phase 4 item 7). The path and identity stay in the engine;
 /// the UI gets a lossy display name and an opaque id.
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +213,12 @@ pub struct Candidate {
     /// Other candidates this one removes too (a folder deleted whole that
     /// holds another row's folder). Selecting both counts them once.
     pub covers: Vec<CandidateId>,
+    /// File or folder, for a top-level temp or log entry. None for cache,
+    /// tool, Docker, and large-file rows.
+    pub kind: Option<EntryKind>,
+    /// Whole days since the entry or anything inside it last changed, for a
+    /// top-level temp or log entry.
+    pub age_days: Option<u32>,
     pub file_count: u64,
     pub links_not_followed: u64,
     pub labels: Vec<Label>,
@@ -285,11 +299,73 @@ pub struct Note {
     pub bytes: Option<u64>,
 }
 
+/// Information-only findings for developers (v0.3). None of it has a
+/// candidate id, so nothing here can be planned, revealed, or removed.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DevAssets {
+    /// Present when Docker answered locally or its disk file exists.
+    pub docker: Option<DockerAssets>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DockerAssets {
+    pub images: Vec<DockerImage>,
+    pub containers: Vec<DockerContainer>,
+    pub volumes: Vec<DockerVolume>,
+    pub disk_file: Option<DiskFile>,
+    /// Why the lists are empty or missing, in words.
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerImage {
+    pub repository: String,
+    pub tag: String,
+    pub size_bytes: Option<u64>,
+    /// Space only this image uses (not shared with other images).
+    pub unique_bytes: Option<u64>,
+    /// Containers created from it, running or not.
+    pub containers: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerContainer {
+    pub name: String,
+    pub image: String,
+    /// `running`, `exited`, ...
+    pub state: String,
+    /// Docker's words, such as "Up 25 minutes".
+    pub status: String,
+    /// The container's own writable layer.
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DockerVolume {
+    pub name: String,
+    pub size_bytes: Option<u64>,
+    /// Containers that use it, running or not.
+    pub in_use_by: Option<u64>,
+}
+
+/// Docker Desktop's virtual disk, measured with one `stat`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiskFile {
+    /// Where it is, relative to the home ("~/Library/...").
+    pub location_label: String,
+    /// Space it takes on disk.
+    pub allocated_bytes: u64,
+    /// The size it reports; can be far larger (a sparse file).
+    pub logical_bytes: u64,
+}
+
 /// What `get_scan` returns. Candidates arrive when the scan finishes.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanView {
     pub scan_id: ScanId,
     pub status: ScanStatus,
+    /// The stages this scan runs, in order; `progress.stage` is the current one.
+    pub stages: Vec<Stage>,
     pub progress: Progress,
     /// How long the scan took, once it stops running (phase 5 item 9).
     pub duration_ms: u64,
@@ -298,6 +374,8 @@ pub struct ScanView {
     pub skipped: Vec<SkippedView>,
     pub roots: Vec<RootView>,
     pub notes: Vec<Note>,
+    /// Deep Scan only: information for developers, never offered.
+    pub dev_assets: Option<DevAssets>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -395,6 +473,9 @@ pub struct ReportItem {
     pub bytes_removed: u64,
     /// What to expect now (phase 8 item 10). Set for removed items.
     pub recovery_text: Option<&'static str>,
+    /// What to do about a busy tool, for an item skipped as
+    /// [`SkipCause::ToolBusy`].
+    pub hint: Option<&'static str>,
 }
 
 /// Free space on one volume, as the system reports it.
@@ -436,14 +517,49 @@ pub enum RunStatus {
     Finished,
 }
 
+/// The item a run is working on now.
+#[derive(Debug, Clone, Serialize)]
+pub struct CurrentItem {
+    /// Its position in the plan, from 0.
+    pub index: usize,
+    pub display_name: String,
+    pub catalog_id: CatalogId,
+    pub elapsed_ms: u64,
+    /// The last lines its tool printed, oldest first, cleaned of terminal
+    /// codes. A tool row's first line names the command. Empty for deletes.
+    pub output: Vec<String>,
+}
+
+/// Finished items so far, by outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct RunCounts {
+    /// Removed, or a tool's clean command ran.
+    pub removed: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunView {
     pub plan_id: PlanId,
     pub status: RunStatus,
     pub items_done: usize,
     pub items_total: usize,
+    /// Since the run started.
+    pub elapsed_ms: u64,
+    /// None between items and once the run is over.
+    pub current: Option<CurrentItem>,
+    /// The most recently finished items, newest last (at most
+    /// [`RECENT_ITEMS`]).
+    pub recent: Vec<ReportItem>,
+    pub counts: RunCounts,
     pub report: Option<Report>,
 }
+
+/// How many finished items a [`RunView`] carries.
+pub const RECENT_ITEMS: usize = 20;
+/// How many output lines a [`CurrentItem`] keeps.
+pub const OUTPUT_LINES: usize = 50;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InterruptedAction {

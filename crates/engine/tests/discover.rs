@@ -196,8 +196,11 @@ fn cancel_after_the_first_progress_event_stops_the_walk() {
     let cancel = CancelToken::new();
     let mut events = 0;
     let result = discover::scan_user_temp(&home.old_context(), &cancel, |progress| {
+        // The stage announcement comes before any file is counted.
+        if progress.files_seen == 0 {
+            return;
+        }
         events += 1;
-        assert!(progress.files_seen > 0);
         cancel.cancel();
     });
     assert!(matches!(result, Err(ScanError::Cancelled)), "{result:?}");
