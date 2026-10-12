@@ -36,11 +36,12 @@ pub enum CatalogId {
     PkgNugetHttp,
     UserLogsOld,
     DockerBuildCache,
+    IdeIndexCaches,
     LargeFilesReport,
 }
 
 impl CatalogId {
-    pub const ALL: [CatalogId; 17] = [
+    pub const ALL: [CatalogId; 18] = [
         CatalogId::UserTemp,
         CatalogId::ThumbnailCache,
         CatalogId::WindowsThumbcache,
@@ -57,6 +58,7 @@ impl CatalogId {
         CatalogId::PkgNugetHttp,
         CatalogId::UserLogsOld,
         CatalogId::DockerBuildCache,
+        CatalogId::IdeIndexCaches,
         CatalogId::LargeFilesReport,
     ];
 
@@ -78,6 +80,7 @@ impl CatalogId {
             CatalogId::PkgNugetHttp => "pkg-nuget-http",
             CatalogId::UserLogsOld => "user-logs-old",
             CatalogId::DockerBuildCache => "docker-build-cache",
+            CatalogId::IdeIndexCaches => "ide-index-caches",
             CatalogId::LargeFilesReport => "large-files-report",
         }
     }
@@ -159,6 +162,9 @@ impl CatalogId {
             CatalogId::DockerBuildCache => {
                 "Docker build cache that no image uses. The next image build is slower."
             }
+            CatalogId::IdeIndexCaches => {
+                "Editor caches and search indexes. The editor rebuilds them on its next start. Settings and local history are not touched."
+            }
             CatalogId::LargeFilesReport => {
                 "Large files in your home folder. Shown so you can decide; never removed."
             }
@@ -183,6 +189,9 @@ impl CatalogId {
     /// What to expect after a successful cleanup (phase 8 item 10).
     pub const fn recovery_text(self) -> Option<&'static str> {
         match self {
+            CatalogId::IdeIndexCaches => {
+                Some("The editor rebuilds its caches the next time it starts.")
+            }
             CatalogId::UserTemp => {
                 Some("Files older than a day were removed from the temporary folder.")
             }
@@ -255,6 +264,7 @@ impl CatalogId {
             CatalogId::PkgNugetHttp => "NuGet downloads",
             CatalogId::UserLogsOld => "Old logs",
             CatalogId::DockerBuildCache => "Docker build cache",
+            CatalogId::IdeIndexCaches => "Editor cache",
             CatalogId::LargeFilesReport => "Large files",
         }
     }
@@ -545,6 +555,9 @@ pub struct Context {
     home: PathBuf,
     /// Windows Local AppData. Defaults to `home\AppData\Local`.
     local_app_data: PathBuf,
+    /// Windows Roaming AppData (`%APPDATA%`), where VS Code keeps its user
+    /// data. Defaults to `home\AppData\Roaming`.
+    roaming_app_data: PathBuf,
     protected: Vec<Protected>,
     temp_roots: Vec<(PathBuf, OwnerRule)>,
     required_temp_area: Option<PathBuf>,
@@ -574,6 +587,7 @@ impl Context {
         let home = fs::canonicalize(&home).unwrap_or(home);
         let mut ctx = Self {
             local_app_data: home.join("AppData").join("Local"),
+            roaming_app_data: home.join("AppData").join("Roaming"),
             home,
             protected: Vec::new(),
             temp_roots,
@@ -626,6 +640,13 @@ impl Context {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn with_local_app_data(mut self, path: PathBuf) -> Self {
         self.local_app_data = fs::canonicalize(&path).unwrap_or(path);
+        self
+    }
+
+    // Set by the Windows adapter from the Roaming AppData Known Folder.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn with_roaming_app_data(mut self, path: PathBuf) -> Self {
+        self.roaming_app_data = fs::canonicalize(&path).unwrap_or(path);
         self
     }
 
@@ -760,6 +781,10 @@ impl Context {
 
     pub fn local_app_data(&self) -> &Path {
         &self.local_app_data
+    }
+
+    pub fn roaming_app_data(&self) -> &Path {
+        &self.roaming_app_data
     }
 
     /// Names of the processes running now.

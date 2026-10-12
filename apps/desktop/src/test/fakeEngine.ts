@@ -30,6 +30,7 @@ function candidate(over: Partial<Candidate> & Pick<Candidate, "id" | "display_na
     file_count: 1,
     links_not_followed: 0,
     labels: [],
+    quit_app: null,
     risk: "low",
     bulk_safe: true,
     confidence: "high",
@@ -79,11 +80,34 @@ export const CANDIDATES: Candidate[] = [
     bulk_safe: false,
     action: "none",
     labels: ["quit_first"],
+    quit_app: "Firefox",
   }),
 ];
 
-/** Deep Scan rows: an overlapping pair, a tool row, a default folder. */
+/** Deep Scan rows: an overlapping pair, a tool row, a default folder, editor caches. */
 export const DEEP_CANDIDATES: Candidate[] = [
+  candidate({
+    id: 40,
+    display_name: "VS Code — CachedData",
+    catalog_id: "ide-index-caches",
+    location_label: "Editor cache",
+    explanation: "Editor caches and search indexes. The editor rebuilds them on its next start.",
+    risk: "medium",
+    bulk_safe: false,
+    action: "none",
+    labels: ["quit_first"],
+    quit_app: "VS Code",
+  }),
+  candidate({
+    id: 41,
+    display_name: "IntelliJ IDEA 2024.3 — index",
+    catalog_id: "ide-index-caches",
+    location_label: "Editor cache",
+    explanation: "Editor caches and search indexes. The editor rebuilds them on its next start.",
+    risk: "medium",
+    bulk_safe: false,
+    quit_app: "IntelliJ IDEA",
+  }),
   candidate({ id: 20, display_name: "registry", estimated_bytes: 8000, covers: [21] }),
   candidate({
     id: 21,

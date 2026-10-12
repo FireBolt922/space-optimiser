@@ -7,6 +7,22 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- Deep Scan offers editor caches: the `Cache`, `CachedData`, `Code Cache`,
+  `GPUCache`, and `CachedExtensionVSIXs` folders of VS Code, VS Code
+  Insiders, and Cursor, and the `caches` and `index` folders of each
+  JetBrains IDE (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, Rider,
+  RustRover, DataGrip, PhpStorm, RubyMine, DataSpell, Aqua). Settings,
+  extensions, local history, and logs are never touched. A row is "Quit VS
+  Code first" while that editor runs, and Select safe items leaves editor
+  caches alone.
+
+### Changed
+
+- Rows that need an app closed name the app ("Quit Firefox first", "Firefox
+  and VS Code are open") instead of saying "the browser".
+
 ## [0.3.0] - 2026-10-11
 
 ### Added

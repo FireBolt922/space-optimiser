@@ -159,7 +159,7 @@ const CACHE_ROWS: [CatalogId; 4] = [
 
 /// Deep Scan's cache folders: the Normal Scan ones, then the fixed
 /// package-cache folders, emptied in place like browser caches.
-const DEEP_CACHE_ROWS: [CatalogId; 8] = [
+const DEEP_CACHE_ROWS: [CatalogId; 9] = [
     CatalogId::ThumbnailCache,
     CatalogId::FontCache,
     CatalogId::WindowsThumbcache,
@@ -168,6 +168,7 @@ const DEEP_CACHE_ROWS: [CatalogId; 8] = [
     CatalogId::PkgCargoCache,
     CatalogId::PkgGradleCaches,
     CatalogId::PkgNugetHttp,
+    CatalogId::IdeIndexCaches,
 ];
 
 /// A row whose tool says where its cache is and cleans it.
@@ -335,7 +336,7 @@ pub fn scan(
     let temp = walk.temp_roots()?;
     let running = ctx
         .process_names()
-        .map(|names| roots::running_browsers(&names, Platform::CURRENT));
+        .map(|names| roots::running_apps(&names, Platform::CURRENT));
     let mut out = Scan {
         temp,
         caches: Vec::new(),
@@ -366,11 +367,11 @@ pub fn scan(
             if !seen.insert(root.id()) {
                 continue;
             }
-            let quit_first = found.browser.is_some_and(|b| match &running {
-                Ok(running) => running.contains(&b),
+            let quit_first = found.app.is_some_and(|a| match &running {
+                Ok(running) => running.contains(&a),
                 Err(_) => true,
             });
-            match walk.cache(row, &root, found.display_name, quit_first)? {
+            match walk.cache(row, &root, found.display_name, found.app, quit_first)? {
                 Some(Ok(candidate)) => out.caches.push(candidate),
                 Some(Err(skipped)) => out.cache_skipped.push(skipped),
                 None => {}
@@ -511,6 +512,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
         row: CatalogId,
         root: &ValidRoot,
         display_name: String,
+        app: Option<roots::App>,
         quit_first: bool,
     ) -> std::result::Result<Option<std::result::Result<Candidate, Skipped>>, ScanError> {
         if row == CatalogId::WindowsThumbcache {
@@ -536,6 +538,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             scope: Scope::Contents,
         };
         let mut candidate = self.candidate(row, target, display_name, summary);
+        candidate.quit_app = app.map(roots::App::label);
         if quit_first {
             candidate.action = Action::None;
             candidate.labels.push(Label::QuitFirst);
@@ -1057,6 +1060,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             file_count: s.files,
             links_not_followed: s.links,
             labels,
+            quit_app: None,
             risk: row.risk(),
             bulk_safe: row.bulk_safe(),
             confidence: Confidence::High,

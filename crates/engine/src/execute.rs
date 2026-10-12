@@ -424,17 +424,23 @@ fn delete_entry(ctx: &Context, entry: &PlanEntry) -> Done {
                 return Done::skipped(cause);
             }
         }
-        (CatalogId::ThumbnailCache | CatalogId::FontCache | CatalogId::BrowserHttpCache, None) => {
-            let browser = match roots::recheck(ctx, entry.catalog_id, planned) {
-                Ok(browser) => browser,
+        (
+            CatalogId::ThumbnailCache
+            | CatalogId::FontCache
+            | CatalogId::BrowserHttpCache
+            | CatalogId::IdeIndexCaches,
+            None,
+        ) => {
+            let app = match roots::recheck(ctx, entry.catalog_id, planned) {
+                Ok(app) => app,
                 Err(cause) => return Done::skipped(cause),
             };
-            if let Some(browser) = browser {
+            if let Some(app) = app {
                 match ctx.process_names() {
-                    Err(_) => return Done::skipped(SkipCause::BrowserCheckFailed),
+                    Err(_) => return Done::skipped(SkipCause::AppCheckFailed),
                     Ok(names) => {
-                        if roots::running_browsers(&names, Platform::CURRENT).contains(&browser) {
-                            return Done::skipped(SkipCause::BrowserRunning);
+                        if roots::running_apps(&names, Platform::CURRENT).contains(&app) {
+                            return Done::skipped(SkipCause::AppRunning);
                         }
                     }
                 }

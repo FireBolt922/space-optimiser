@@ -61,8 +61,8 @@ export function Start({ notice, interrupted, onDismissInterrupted, onScan }: Pro
         <div className="card mode">
           <h2 className="title">Deep Scan</h2>
           <p className="body-sm ink-muted">
-            For developers. Everything in Normal Scan, plus package caches, old logs, Docker&apos;s
-            build cache, and a list of large files.
+            For developers. Everything in Normal Scan, plus package caches, editor caches, old logs,
+            Docker&apos;s build cache, and a list of large files.
           </p>
           <button type="button" className="button button-primary" onClick={() => onScan("deep")}>
             Deep Scan

@@ -602,7 +602,7 @@ fn a_browser_opened_after_the_scan_keeps_its_cache() {
 
     assert_eq!(
         skipped(&report, common::CHROME_CACHE),
-        SkipCause::BrowserRunning
+        SkipCause::AppRunning
     );
     assert!(home.chrome_cache().join("Cache_Data/f_000001").is_file());
 }
@@ -628,7 +628,7 @@ fn a_browser_cache_is_kept_when_processes_cannot_be_listed() {
 
     assert_eq!(
         skipped(&report, common::CHROME_CACHE),
-        SkipCause::BrowserCheckFailed
+        SkipCause::AppCheckFailed
     );
     assert!(home.chrome_cache().join("Cache_Data/f_000001").is_file());
 }
