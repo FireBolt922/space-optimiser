@@ -190,12 +190,16 @@ describe("results", () => {
     expect(screen.getByText("Not sure — not offered")).toBeTruthy();
   });
 
-  // Phase 5 test 8: a running browser's cache cannot be selected.
+  // Phase 5 test 8: a running browser's cache cannot be selected. The row
+  // and the notice name the app, not "the browser".
   it("a browser that is open is shown as quit first and cannot be selected", async () => {
     await toResults();
     const firefox = box("Firefox — abcd.default");
     expect(firefox.disabled).toBe(true);
-    expect(screen.getByText("Quit the browser first")).toBeTruthy();
+    expect(screen.getByText("Quit Firefox first")).toBeTruthy();
+    expect(
+      screen.getByText("Firefox is open, so its cache is not offered. Quit it, then scan again."),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
     expect(firefox.checked).toBe(false);
   });
@@ -450,6 +454,22 @@ describe("deep scan", () => {
     expect(box("~/.cargo/registry/cache").checked).toBe(false);
     expect(box("~/Library/pnpm/store/v3").checked).toBe(false);
     expect(box("~/Library/Caches/pip").disabled).toBe(true);
+    expect(box("IntelliJ IDEA 2024.3 — index").checked).toBe(false);
+  });
+
+  // The ide-index-caches row: under Developer tools, named after the editor.
+  it("editor caches sit under Developer tools and say which editor to quit", async () => {
+    await toDeepResults();
+    const code = box("VS Code — CachedData");
+    expect(code.disabled).toBe(true);
+    expect(screen.getByText("Quit VS Code first")).toBeTruthy();
+    expect(
+      screen.getByText("VS Code is open, so its cache is not offered. Quit it, then scan again."),
+    ).toBeTruthy();
+    const categories = within(screen.getByRole("group", { name: "Categories" }));
+    fireEvent.click(categories.getByRole("button", { name: /^Developer tools/ }));
+    expect(screen.getByRole("region", { name: "Editor cache" })).toBeTruthy();
+    expect(box("IntelliJ IDEA 2024.3 — index").disabled).toBe(false);
   });
 
   it("a tool row can be selected and its bound stays out of the delete total", async () => {

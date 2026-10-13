@@ -33,6 +33,7 @@ const BY_CATALOG_ID: Record<string, CategoryId> = {
   "font-cache": "system",
   "user-logs-old": "logs",
   "docker-build-cache": "developer",
+  "ide-index-caches": "developer",
   "large-files-report": "large",
 };
 

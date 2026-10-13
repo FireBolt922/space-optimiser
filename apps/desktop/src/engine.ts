@@ -28,6 +28,8 @@ export interface Candidate {
   file_count: number;
   links_not_followed: number;
   labels: ("shared" | "logical_size" | "quit_first")[];
+  /** The app to quit before this cache is cleaned ("Chrome", "VS Code"); null otherwise. */
+  quit_app: string | null;
   risk: Risk;
   bulk_safe: boolean;
   confidence: "high" | "uncertain";

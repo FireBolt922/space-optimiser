@@ -22,8 +22,9 @@ export function Help({ info }: Props) {
         </p>
         <p className="body-sm">
           Deep Scan is for developers. It does everything Normal Scan does, and also checks package
-          caches, old logs, and Docker&apos;s build cache, and lists large files. Large files are
-          shown so you can decide; they are never removed.
+          caches, editor caches (VS Code, Cursor, and JetBrains IDEs), old logs, and Docker&apos;s
+          build cache, and lists large files. Large files are shown so you can decide; they are
+          never removed.
         </p>
         <p className="body-sm ink-muted">
           A scan only looks. Nothing is removed until you review the list and confirm.
@@ -39,9 +40,9 @@ export function Help({ info }: Props) {
           temporary files, thumbnails, and old log files.
         </p>
         <p className="body-sm">
-          It leaves out items that cause a download again or that a browser is using, such as
-          browser caches, package caches, and tool commands. You can still choose those one at a
-          time. Items marked &ldquo;Not sure — not offered&rdquo; cannot be chosen.
+          It leaves out items that cause a download again or that an open app is using, such as
+          browser caches, editor caches, package caches, and tool commands. You can still choose
+          those one at a time. Items marked &ldquo;Not sure — not offered&rdquo; cannot be chosen.
         </p>
       </section>
 

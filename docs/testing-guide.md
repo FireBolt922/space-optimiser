@@ -78,6 +78,10 @@ expected for a test build. Write down the exact warning you saw.
    whether it stopped quickly.
    - [ ] The large-file list is information only; nothing in it can be
          checked.
+   - [ ] With VS Code, Cursor, or a JetBrains IDE open, its cache rows say
+         "Quit … first" and cannot be checked. Quit it and scan again to
+         see them offered. Rows name only cache folders, never `User`,
+         settings, or `LocalHistory`.
 5. Try **Show in folder** on one row. Your file manager opens there.
 6. Keyboard: unplug or ignore the mouse. Can you scan, check a row, and
    reach the review screen with Tab, Space, and Enter only?

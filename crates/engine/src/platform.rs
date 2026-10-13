@@ -329,8 +329,8 @@ mod sys {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::UI::Shell::{
         FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
-        FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_SkyDrive, FOLDERID_Videos,
-        FOLDERID_Windows, SHGetKnownFolderPath,
+        FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_RoamingAppData,
+        FOLDERID_SkyDrive, FOLDERID_Videos, FOLDERID_Windows, SHGetKnownFolderPath,
     };
     use windows_sys::core::{GUID, PWSTR};
 
@@ -382,9 +382,14 @@ mod sys {
         // rejected, as a macOS root outside `/private/var/folders` is.
         let ctx = Context::new(home, protected, temp_roots, local.clone());
         // Browser caches and Explorer's thumbnails live here (phase 5).
-        Ok(match local {
+        let ctx = match local {
             Some(local) => ctx.with_local_app_data(local),
             None => ctx,
+        };
+        // VS Code and Cursor keep their user data under Roaming AppData.
+        Ok(match known_folder(&FOLDERID_RoamingAppData) {
+            Ok(roaming) => ctx.with_roaming_app_data(roaming),
+            Err(_) => ctx,
         })
     }
 

@@ -13,7 +13,7 @@ use common::{Home, basic_home, chrome_process};
 use space_optimiser_engine::discover::{self, CancelToken, NormalScan, RootOutcome};
 use space_optimiser_engine::model::{Action, Candidate, Label, Platform, Risk};
 use space_optimiser_engine::policy::{CatalogId, Context};
-use space_optimiser_engine::roots::{self, Browser};
+use space_optimiser_engine::roots::{self, App};
 
 fn scan(ctx: &Context) -> NormalScan {
     discover::scan_normal(ctx, &CancelToken::new(), |_| {}).unwrap()
@@ -315,17 +315,17 @@ fn every_browser_row_is_blocked_when_processes_cannot_be_listed() {
 fn process_names_map_to_browsers_per_os() {
     let running = |names: &[&str], platform| {
         let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-        roots::running_browsers(&names, platform)
+        roots::running_apps(&names, platform)
     };
     assert_eq!(
         running(&["Google Chrome Canary"], Platform::Macos),
-        [Browser::Chrome]
+        [App::Chrome]
     );
-    assert_eq!(running(&["MSEDGE.EXE"], Platform::Windows), [Browser::Edge]);
-    assert_eq!(running(&["firefox"], Platform::Linux), [Browser::Firefox]);
+    assert_eq!(running(&["MSEDGE.EXE"], Platform::Windows), [App::Edge]);
+    assert_eq!(running(&["firefox"], Platform::Linux), [App::Firefox]);
     assert_eq!(
         running(&["chromium-browse"], Platform::Linux),
-        [Browser::Chromium]
+        [App::Chromium]
     );
     // A helper or an unrelated process is not the browser.
     assert!(running(&["Google Chrome Helper (Renderer)"], Platform::Macos).is_empty());
@@ -347,7 +347,7 @@ fn the_snap_firefox_cache_is_found() {
         .iter()
         .find(|r| r.root.as_ref().is_ok_and(|v| v.path() == snap))
         .expect("snap Firefox cache");
-    assert_eq!(root.browser, Some(Browser::Firefox));
+    assert_eq!(root.app, Some(App::Firefox));
     assert_eq!(root.display_name, "Firefox (Snap) — abcd1234.default");
 }
 

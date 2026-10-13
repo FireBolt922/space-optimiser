@@ -66,7 +66,7 @@ Milestones M1 to M7 are merged: the engine, the Normal and Deep Scan rows below,
 
 **Normal Scan** offers old files in the per-user temporary folder, the HTTP caches of Chrome, Edge, Brave, Chromium, and Firefox (only when the browser is not running), and on Ubuntu the thumbnail and font caches.
 
-**Deep Scan** adds developer caches (npm, npx, pnpm, Yarn, pip, uv, Cargo, Gradle, NuGet), old log files on macOS, the Docker build cache when Docker runs locally, and a list of large files in the home folder. The large-file list is information only.
+**Deep Scan** adds developer caches (npm, npx, pnpm, Yarn, pip, uv, Cargo, Gradle, NuGet), editor caches (VS Code, Cursor, and JetBrains IDEs, only when the editor is not running), old log files on macOS, the Docker build cache when Docker runs locally, and a list of large files in the home folder. The large-file list is information only.
 
 "Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan).
 

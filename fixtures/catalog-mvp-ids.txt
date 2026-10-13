@@ -18,3 +18,4 @@
 "user-logs-old"
 "docker-build-cache"
 "large-files-report"
+"ide-index-caches"

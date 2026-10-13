@@ -57,8 +57,14 @@ function isEmpty(c: Candidate): boolean {
   return c.action === "delete" && c.estimated_bytes === 0 && c.upper_bound_bytes === null;
 }
 
+/** "Chrome and VS Code", "Chrome, Firefox, and VS Code". */
+function listWords(items: string[]): string {
+  if (items.length <= 2) return items.join(" and ");
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
 function actionWord(c: Candidate): string {
-  if (c.labels.includes("quit_first")) return "Quit the browser first";
+  if (c.labels.includes("quit_first")) return `Quit ${c.quit_app ?? "the app"} first`;
   switch (c.action) {
     case "delete":
       return "Clean";
@@ -148,7 +154,14 @@ export function Results({
     .reduce((sum, c) => sum + (c.upper_bound_bytes ?? 0), 0);
   const anySafe = scan.candidates.some((c) => c.bulk_safe && selectable(c));
   const memoryRoot = scan.roots.some((r) => r.frees_memory);
-  const quitFirst = scan.candidates.some((c) => c.labels.includes("quit_first"));
+  // The apps that are open, each once, in the order they appear.
+  const openApps = Array.from(
+    new Set(
+      scan.candidates
+        .filter((c) => c.labels.includes("quit_first"))
+        .map((c) => c.quit_app ?? "An app"),
+    ),
+  );
 
   // Category tabs: only the categories this scan found, with count and size.
   const categories = CATEGORIES.map((cat) => {
@@ -373,15 +386,17 @@ export function Results({
               )}
             </div>
           )}
-          {quitFirst && (
+          {openApps.length > 0 && (
             <p className="body-sm ink-muted">
-              A browser is open, so its cache is not offered. Quit the browser, then scan again.
+              {openApps.length === 1
+                ? `${openApps[0]} is open, so its cache is not offered. Quit it, then scan again.`
+                : `${listWords(openApps)} are open, so their caches are not offered. Quit them, then scan again.`}
             </p>
           )}
           {leftOut > 0 && (
             <p className="body-sm ink-muted">
               {plural(leftOut, "other item was", "other items were")} left unselected. They need a
-              separate choice because they cause a re-download or remove a cache a browser is using.
+              separate choice because they cause a re-download or remove a cache an app is using.
             </p>
           )}
           {memoryRoot && (

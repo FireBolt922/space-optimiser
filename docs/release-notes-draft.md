@@ -26,8 +26,10 @@ and removes only the items you check and confirm.
   Ubuntu), and on Ubuntu the thumbnail and font caches. On Windows,
   Explorer's thumbnail database is shown for information only.
 - **Deep Scan** adds developer caches: npm, npx, pnpm, Yarn, pip, uv, Cargo,
-  Gradle, and NuGet, old log files on macOS, Docker build cache when Docker
-  runs on this computer, and a list of large files in your home folder.
+  Gradle, and NuGet, editor caches (VS Code, Cursor, and JetBrains IDEs,
+  only while the editor is closed; settings and local history stay), old
+  log files on macOS, Docker build cache when Docker runs on this computer,
+  and a list of large files in your home folder.
   The large-file list is for information only; the app never removes those
   files. Deep Scan does not walk the whole disk.
 
@@ -36,8 +38,8 @@ and removes only the items you check and confirm.
 - Cleanups run only after you review the list and confirm.
 - **Select safe items** picks only low-risk items: old temporary files,
   and on Ubuntu thumbnails and font caches (old logs on macOS in Deep
-  Scan). It does not include browser caches or package caches; check those
-  yourself if you want them removed.
+  Scan). It does not include browser, editor, or package caches; check
+  those yourself if you want them removed.
 - Docker disk files (such as `Docker.raw`) and Docker volumes are not
   cleaned. The Trash and the Recycle Bin are not emptied.
 - Your documents, photos, downloads, and source code folders are outside

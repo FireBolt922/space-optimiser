@@ -222,6 +222,9 @@ pub struct Candidate {
     pub file_count: u64,
     pub links_not_followed: u64,
     pub labels: Vec<Label>,
+    /// The app that must be quit before this cache is cleaned ("Chrome",
+    /// "VS Code"), for "quit first" rows. None for every other row.
+    pub quit_app: Option<&'static str>,
     pub risk: Risk,
     pub bulk_safe: bool,
     pub confidence: Confidence,
@@ -442,12 +445,12 @@ pub enum SkipCause {
     #[error("this cleanup is not in this build")]
     NotInThisBuild,
     /// A "quit first" row whose app is running now.
-    #[error("the browser is open. Quit it, then scan again")]
-    BrowserRunning,
-    /// The process list could not be read, so a running browser cannot be
+    #[error("the app is open. Quit it, then scan again")]
+    AppRunning,
+    /// The process list could not be read, so a running app cannot be
     /// ruled out.
-    #[error("could not check whether the browser is open")]
-    BrowserCheckFailed,
+    #[error("could not check whether the app is open")]
+    AppCheckFailed,
     /// The tool is busy (a lock held by another process).
     #[error("the tool is busy with another process. Try again later")]
     ToolBusy,
