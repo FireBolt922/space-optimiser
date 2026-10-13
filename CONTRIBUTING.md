@@ -100,6 +100,6 @@ or deleted.
 
 ## Releases
 
-Maintainers run the Release workflow from `main`, which opens a version
-pull request; merging it builds and publishes the installers. See the
-README.
+Maintainers run the Release workflow from `main`. It opens a version pull
+request, merges it when CI is green, and starts the build that publishes
+the installers. See the README.

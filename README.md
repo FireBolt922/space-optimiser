@@ -105,19 +105,19 @@ CI runs on every pull request and on `main`: the UI lint and tests, formatting, 
 
 ## Releasing
 
-Releases start from the Actions tab, never from a push to `main`.
+A release is one click in the Actions tab, never a push to `main`.
 
 1. Open Actions → Release → Run workflow on `main`. Leave `bump` on `auto` (a feature since the last tag raises the minor version, a fix the patch version) or pick the part to raise, and pick a channel: `prerelease` for testers, `draft` to check the page first, or `release`.
-2. The workflow raises the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and `package-lock.json`, moves the **Unreleased** entries of `CHANGELOG.md` into a dated section, and opens a pull request `chore(release): vX.Y.Z` with CI running on it.
-3. Merge that pull request when CI is green. The Publish workflow then builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, creates the `vX.Y.Z` tag, and publishes the release page with the changelog section and a `SHA256SUMS.txt`.
+2. The workflow raises the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and `package-lock.json`, moves the **Unreleased** entries of `CHANGELOG.md` into a dated section, opens a pull request `chore(release): vX.Y.Z`, and runs CI on it.
+3. When CI is green, the workflow merges the pull request and starts Publish, which builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, creates the `vX.Y.Z` tag, and publishes the release page with the changelog section and a `SHA256SUMS.txt`.
 
-The workflows refuse a version that is already tagged, a commit whose CI has not passed, and a changelog with nothing under **Unreleased**. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md). To retry a build that failed after the merge, run Actions → Publish → Run workflow on `main`.
+The main-branch ruleset still applies to that merge: every required check must be green and the branch up to date. If CI fails, the pull request stays open and nothing is released; fix it on the branch and merge by hand, and Publish starts on the merge. The workflows refuse a version that is already tagged, a commit whose CI has not passed, and a changelog with nothing under **Unreleased**. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md). To retry a build that failed after the merge, run Actions → Publish → Run workflow on `main`.
 
 After a release, Publish starts the Pages workflow, which rebuilds the [download page](https://firebolt922.github.io/space-optimiser/) from the published releases (drafts are left out). It also runs daily and when `site/` changes, so a release edited by hand shows up within a day, or at once with Actions → Pages → Run workflow. To preview the page locally: `node site/build.mjs --repo FireBolt922/space-optimiser --out _site`, then open `_site/index.html`.
 
 The download page needs Settings → Pages → Source set to "GitHub Actions". A custom domain is set on the same settings page; the page uses relative links, so nothing in the repository changes.
 
-The Release workflow opens pull requests, so Settings → Actions → General → Workflow permissions must allow GitHub Actions to create and approve pull requests.
+The Release workflow opens and merges pull requests, so Settings → Actions → General → Workflow permissions must allow GitHub Actions to create and approve pull requests.
 
 ## Licence
 

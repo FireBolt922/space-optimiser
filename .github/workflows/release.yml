@@ -1,12 +1,16 @@
 name: Release
 
-# Starts a release: Actions → Release → Run workflow on main. It raises
-# the version (from the commits since the last tag, or the part you pick),
-# moves the Unreleased changelog entries into a dated section, and opens a
-# pull request with those changes and CI running on it. Merge that pull
-# request when CI is green: the Publish workflow then builds the
-# installers, tags the commit, and creates the release page. Nothing is
-# built or tagged here.
+# Releases with one click: Actions → Release → Run workflow on main. It
+# raises the version (from the commits since the last tag, or the part you
+# pick), moves the Unreleased changelog entries into a dated section, opens
+# a pull request with those changes, runs CI on it, and merges it when CI
+# is green. It then starts Publish, which builds the installers, tags the
+# commit, creates the release page, and rebuilds the download page.
+# Nothing is built or tagged here.
+#
+# If CI fails, the pull request stays open and nothing is released. Fix
+# the cause on the branch and merge it by hand: Publish starts on that
+# merge by itself.
 #
 # Needs once, in Settings → Actions → General → Workflow permissions:
 # "Allow GitHub Actions to create and approve pull requests".
@@ -37,12 +41,14 @@ concurrency:
 
 jobs:
   pull-request:
-    name: open the release pull request
+    name: open, test, and merge the release pull request
     runs-on: ubuntu-latest
+    # Most of the time is spent waiting for CI on the release branch.
+    timeout-minutes: 180
     permissions:
-      contents: write # push the release branch
-      pull-requests: write # open the pull request
-      actions: write # read CI runs and start CI on the branch
+      contents: write # push the release branch and merge it
+      pull-requests: write # open and merge the pull request
+      actions: write # read CI runs, start CI, and start Publish
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +111,7 @@ jobs:
         run: scripts/bump-version.sh "$VERSION"
 
       - name: Push the release branch
+        id: push
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BRANCH: ${{ steps.version.outputs.branch }}
@@ -115,6 +122,7 @@ jobs:
           git add Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json CHANGELOG.md
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Open the pull request
         id: pr
@@ -129,9 +137,11 @@ jobs:
             echo "Channel: ${CHANNEL}"
             echo
             echo "Raises the version from ${CURRENT} to ${VERSION} and dates the changelog."
-            echo "Merge this pull request when CI is green. The Publish workflow then builds"
-            echo "the installers, tags \`v${VERSION}\`, and creates the release page on the"
-            echo "channel above (edit the first line to change it: prerelease, draft, or release)."
+            echo "The Release workflow merges this pull request when CI is green and starts"
+            echo "Publish, which builds the installers, tags \`v${VERSION}\`, and creates the"
+            echo "release page on the channel above. If CI fails, fix it on this branch and"
+            echo "merge by hand; Publish then reads the channel from the first line"
+            echo "(prerelease, draft, or release)."
             echo
             echo "## Changes in ${VERSION}"
             echo
@@ -164,5 +174,83 @@ jobs:
             echo
             echo "${URL}"
             echo
-            echo "Merge it when CI is green. Publish then builds and releases v${VERSION} as a ${CHANNEL}."
+            echo "It merges when CI is green, and Publish then releases v${VERSION} as a ${CHANNEL}."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # `gh workflow run` returns before the run exists, so the run is
+      # looked up by the commit until it shows.
+      - name: Wait for CI on the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.push.outputs.sha }}
+          URL: ${{ steps.pr.outputs.url }}
+        run: |
+          run=""
+          for _ in $(seq 1 30); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
+              --event workflow_dispatch --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          if [ -z "$run" ]; then
+            echo "CI did not start on ${SHA}. Start it on the branch, then merge ${URL} by hand when it is green." >&2
+            exit 1
+          fi
+          if ! gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 60 >/dev/null; then
+            echo "CI failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run}" >&2
+            echo "Nothing was released. Fix the cause on the branch and merge ${URL} by hand; Publish starts on the merge." >&2
+            exit 1
+          fi
+          echo "CI passed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run}"
+
+      # The ruleset still applies: the merge goes through only with every
+      # required check green and the branch up to date with main.
+      # --match-head-commit refuses if anything was pushed to the branch
+      # after the commit that CI tested. The checks can take a moment to
+      # show as passed after the run ends, so the merge is retried.
+      - name: Merge the pull request
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.push.outputs.sha }}
+          URL: ${{ steps.pr.outputs.url }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if gh pr merge "$URL" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$SHA"; then
+              merged=$(gh pr view "$URL" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)
+              echo "sha=$merged" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Merge attempt ${attempt} refused; trying again in 20 seconds."
+            sleep 20
+          done
+          echo "Could not merge ${URL}. If main moved while CI ran, update the branch, wait for CI, and merge by hand; Publish starts on the merge." >&2
+          exit 1
+
+      - name: Delete the release branch
+        env:
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: git push origin --delete "$BRANCH" || echo "Could not delete ${BRANCH}; delete it by hand."
+
+      # A merge made with the workflow token does not start push workflows,
+      # so Publish and the CI run on main are started here. Publish builds
+      # the head of main, so it starts only while that is still the release
+      # commit. The CI run on main lets the next Release run start from it.
+      - name: Start Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGED: ${{ steps.merge.outputs.sha }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$head" != "$MERGED" ]; then
+            echo "main moved past the release commit ${MERGED} before Publish could start. Run Actions → Publish by hand only if main holds v${VERSION} and nothing unreleased." >&2
+            exit 1
+          fi
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main -f channel="$CHANNEL"
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
+          {
+            echo
+            echo "Merged as ${MERGED}. Publish is building v${VERSION}: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/publish.yml"
           } >> "$GITHUB_STEP_SUMMARY"

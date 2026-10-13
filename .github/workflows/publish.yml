@@ -1,10 +1,10 @@
 name: Publish
 
 # Builds installers for macOS, Ubuntu, and Windows, tags the commit, and
-# creates the release page. It starts by itself when a release pull
-# request (opened by the Release workflow) is merged into main. Run it by
-# hand on main to retry a release that did not finish; the tag is created
-# only at the end, so a failed run leaves nothing behind.
+# creates the release page. The Release workflow starts it after merging
+# its release pull request, and it starts by itself when a person merges
+# one. Run it by hand on main to retry a release that did not finish; the
+# tag is created only at the end, so a failed run leaves nothing behind.
 #
 # Builds are unsigned: signing needs certificates that are not in this
 # repository.
