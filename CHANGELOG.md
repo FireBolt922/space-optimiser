@@ -24,6 +24,9 @@ minor version can change behaviour.
 
 - Rows that need an app closed name the app ("Quit Firefox first", "Firefox
   and VS Code are open") instead of saying "the browser".
+- A release is one click: the Release workflow merges its version pull
+  request when CI is green and starts the build that publishes the
+  installers and the download page.
 
 ## [0.3.0] - 2026-10-11
 
