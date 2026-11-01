@@ -12,11 +12,11 @@ publish = false
 # Exact versions. Adding or changing one needs a plan update (AGENTS.md).
 [workspace.dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 thiserror = "=2.0.21"
-libc = "=0.2.190"
+libc = "=0.2.191"
 # Only the `fs` API, which tempfile already enables: no new crates in the lockfile.
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"] }
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs"] }
 windows-sys = "=0.61.2"
 tempfile = "=3.27.0"
 trybuild = "=1.0.122"
