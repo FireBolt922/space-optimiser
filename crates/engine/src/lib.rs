@@ -15,8 +15,13 @@
 //! report, and totals that count each file once. Milestones M6 and M7 add
 //! "Show in folder" through the OS file manager (started by [`tool`]), a
 //! plain-text report export, the About data, and the Windows elevation
-//! refusal.
+//! refusal. Version 0.5 adds two tools beside the two scans: Projects
+//! ([`projects`]: dependency and build folders, found by marker and offered
+//! only inside source control) and Android ([`android`]: Quick Boot
+//! snapshots and system images no emulator references), and a report row
+//! for Chrome's on-device AI model.
 
+mod android;
 mod audit;
 pub mod clock;
 mod dedup;
@@ -30,6 +35,7 @@ pub mod model;
 pub mod platform;
 pub mod policy;
 mod process;
+mod projects;
 pub mod roots;
 mod session;
 mod tool;

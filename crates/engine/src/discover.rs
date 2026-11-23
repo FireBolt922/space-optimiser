@@ -2,9 +2,14 @@
 //! Never deletes (phase 4). Normal Scan (phase 5) covers `user-temp` and
 //! the cache rows that [`crate::roots`] lists, runs no tools, and does not
 //! walk the home. Deep Scan (phase 6) adds the package caches, old logs,
-//! the tool rows, Docker, and the large-file report.
+//! the tool rows, Docker, and the large-file report. The Projects and
+//! Android tools (phase 13) each run on their own: Projects walks the home
+//! for dependency and build folders, and Android reads the emulators and
+//! the SDK's system images.
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,14 +18,16 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
+use crate::android;
 use crate::docker;
 use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{
     Action, Candidate, CandidateId, Confidence, DevAssets, DockerAssets, EntryKind, Label, Note,
-    Platform, ScanMode, Scope, ToolAction,
+    Platform, Risk, ScanMode, Scope, ToolAction,
 };
 pub use crate::policy::SkipReason;
 use crate::policy::{self, CatalogId, Context, RootRejection, ValidRoot};
+use crate::projects;
 use crate::roots;
 use crate::tool::{self, Exit, NotFound, Tool};
 
@@ -60,6 +67,18 @@ impl Progress {
         stage: Stage::Temp,
         detail: None,
     };
+
+    /// Nothing seen yet, in the first stage `mode` runs.
+    pub fn starting(mode: ScanMode) -> Progress {
+        Progress {
+            stage: match mode {
+                ScanMode::Normal | ScanMode::Deep => Stage::Temp,
+                ScanMode::Projects => Stage::Projects,
+                ScanMode::Android => Stage::Android,
+            },
+            ..Progress::START
+        }
+    }
 }
 
 /// A part of a scan, in the order the scan runs them. The UI names them.
@@ -72,11 +91,17 @@ pub enum Stage {
     Tools,
     Docker,
     LargeFiles,
+    /// The Projects tool's only stage.
+    Projects,
+    /// The Android tool's only stage.
+    Android,
 }
 
 /// The stages `mode` runs, in order.
 pub fn stages(mode: ScanMode) -> Vec<Stage> {
     match mode {
+        ScanMode::Projects => vec![Stage::Projects],
+        ScanMode::Android => vec![Stage::Android],
         ScanMode::Normal => vec![Stage::Temp, Stage::Caches],
         ScanMode::Deep => vec![
             Stage::Temp,
@@ -141,7 +166,7 @@ pub fn scan_user_temp(
     on_progress: impl FnMut(Progress),
 ) -> std::result::Result<TempScan, ScanError> {
     refuse_root(ctx)?;
-    let mut walk = Walk::new(ctx, cancel, on_progress);
+    let mut walk = Walk::new(ctx, cancel, on_progress, ScanMode::Normal);
     let roots = walk.temp_roots()?;
     Ok(TempScan {
         roots,
@@ -149,21 +174,25 @@ pub fn scan_user_temp(
     })
 }
 
-/// The Normal Scan rows that are cache folders, in display order.
-const CACHE_ROWS: [CatalogId; 4] = [
+/// The Normal Scan rows that are cache folders, in display order. The
+/// on-device AI model is a folder beside the browser profiles; it is sized
+/// and shown, never emptied.
+const CACHE_ROWS: [CatalogId; 5] = [
     CatalogId::ThumbnailCache,
     CatalogId::FontCache,
     CatalogId::WindowsThumbcache,
     CatalogId::BrowserHttpCache,
+    CatalogId::ChromeOnDeviceModel,
 ];
 
 /// Deep Scan's cache folders: the Normal Scan ones, then the fixed
 /// package-cache folders, emptied in place like browser caches.
-const DEEP_CACHE_ROWS: [CatalogId; 9] = [
+const DEEP_CACHE_ROWS: [CatalogId; 10] = [
     CatalogId::ThumbnailCache,
     CatalogId::FontCache,
     CatalogId::WindowsThumbcache,
     CatalogId::BrowserHttpCache,
+    CatalogId::ChromeOnDeviceModel,
     CatalogId::PkgNpx,
     CatalogId::PkgCargoCache,
     CatalogId::PkgGradleCaches,
@@ -285,6 +314,14 @@ const NETWORK_HOME: &str =
     "Your home folder is on a network volume, so the large-file list was skipped.";
 const VOLUMES: &str =
     "Docker volumes could free this much, but they hold databases and are never offered.";
+const NETWORK_HOME_PROJECTS: &str =
+    "Your home folder is on a network volume, so projects were not scanned.";
+const NO_ANDROID: &str = "No Android emulators or system images were found.";
+const EMULATORS_UNKNOWN: &str = "Space Optimiser could not read every emulator's settings, so it cannot tell which system images are in use. No image is offered.";
+const IMAGE_UNKNOWN: &str =
+    "An emulator's settings could not be read, so this image may be in use. Not offered.";
+const IMAGE_UNUSED: &str = "No emulator uses this image.";
+const EMULATOR_DATA: &str = "Apps and data inside the emulator are never removed.";
 
 /// What a scan found.
 #[derive(Debug)]
@@ -332,66 +369,25 @@ pub fn scan(
     on_progress: impl FnMut(Progress),
 ) -> std::result::Result<Scan, ScanError> {
     refuse_root(ctx)?;
-    let mut walk = Walk::new(ctx, cancel, on_progress);
-    let temp = walk.temp_roots()?;
-    let running = ctx
-        .process_names()
-        .map(|names| roots::running_apps(&names, Platform::CURRENT));
+    let mut walk = Walk::new(ctx, cancel, on_progress, mode);
     let mut out = Scan {
-        temp,
+        temp: Vec::new(),
         caches: Vec::new(),
         cache_skipped: Vec::new(),
         notes: Vec::new(),
         dev_assets: None,
         progress: walk.progress,
     };
-    let mut seen = HashSet::new();
-    walk.stage(Stage::Caches, None);
-    let rows: &[CatalogId] = match mode {
-        ScanMode::Normal => &CACHE_ROWS,
-        ScanMode::Deep => &DEEP_CACHE_ROWS,
-    };
-    for &row in rows {
-        for found in roots::cache_roots(ctx, row, Platform::CURRENT) {
-            walk.check_cancel()?;
-            let root = match found.root {
-                Ok(root) => root,
-                Err(reason) => {
-                    out.cache_skipped.push(Skipped {
-                        display_name: found.display_name,
-                        reason,
-                    });
-                    continue;
-                }
-            };
-            if !seen.insert(root.id()) {
-                continue;
-            }
-            let quit_first = found.app.is_some_and(|a| match &running {
-                Ok(running) => running.contains(&a),
-                Err(_) => true,
-            });
-            match walk.cache(row, &root, found.display_name, found.app, quit_first)? {
-                Some(Ok(candidate)) => out.caches.push(candidate),
-                Some(Err(skipped)) => out.cache_skipped.push(skipped),
-                None => {}
-            }
+    match mode {
+        ScanMode::Normal | ScanMode::Deep => walk.clean_up(mode, &mut out)?,
+        ScanMode::Projects => {
+            walk.stage(Stage::Projects, None);
+            walk.projects(&mut out)?;
         }
-    }
-    if mode == ScanMode::Deep {
-        walk.stage(Stage::Logs, None);
-        walk.logs(&mut out)?;
-        for spec in &TOOL_ROWS {
-            walk.check_cancel()?;
-            walk.stage(Stage::Tools, spec.names.first().copied());
-            walk.tool_row(spec, &mut out)?;
+        ScanMode::Android => {
+            walk.stage(Stage::Android, None);
+            walk.android(&mut out)?;
         }
-        walk.check_cancel()?;
-        walk.stage(Stage::Docker, None);
-        let docker = walk.docker(&mut out)?;
-        out.dev_assets = Some(DevAssets { docker });
-        walk.stage(Stage::LargeFiles, None);
-        walk.large_files(&mut out)?;
     }
     out.progress = walk.progress;
     Ok(out)
@@ -461,16 +457,86 @@ struct Target<'r> {
 }
 
 impl<'a, F: FnMut(Progress)> Walk<'a, F> {
-    fn new(ctx: &'a Context, cancel: &'a CancelToken, on_progress: F) -> Self {
+    fn new(ctx: &'a Context, cancel: &'a CancelToken, on_progress: F, mode: ScanMode) -> Self {
         Walk {
             ctx,
             cancel,
             on_progress,
-            progress: Progress::START,
+            progress: Progress::starting(mode),
             since_event: 0,
             last_event: Instant::now(),
             next_id: 1,
         }
+    }
+
+    /// Normal Scan and Deep Scan: temp, the cache rows, and for Deep Scan
+    /// the logs, the tool rows, Docker, and the large-file report.
+    fn clean_up(&mut self, mode: ScanMode, out: &mut Scan) -> std::result::Result<(), ScanError> {
+        out.temp = self.temp_roots()?;
+        self.stage(Stage::Caches, None);
+        let rows: &[CatalogId] = match mode {
+            ScanMode::Deep => &DEEP_CACHE_ROWS,
+            _ => &CACHE_ROWS,
+        };
+        self.cache_rows(rows, out)?;
+        if mode == ScanMode::Deep {
+            self.stage(Stage::Logs, None);
+            self.logs(out)?;
+            for spec in &TOOL_ROWS {
+                self.check_cancel()?;
+                self.stage(Stage::Tools, spec.names.first().copied());
+                self.tool_row(spec, out)?;
+            }
+            self.check_cancel()?;
+            self.stage(Stage::Docker, None);
+            let docker = self.docker(out)?;
+            out.dev_assets = Some(DevAssets { docker });
+            self.stage(Stage::LargeFiles, None);
+            self.large_files(out)?;
+        }
+        Ok(())
+    }
+
+    /// Each folder `rows` list, judged whole. A row whose app is running,
+    /// or cannot be ruled out, is "quit first".
+    fn cache_rows(
+        &mut self,
+        rows: &[CatalogId],
+        out: &mut Scan,
+    ) -> std::result::Result<(), ScanError> {
+        let ctx = self.ctx;
+        let running = ctx
+            .process_names()
+            .map(|names| roots::running_apps(&names, Platform::CURRENT));
+        let mut seen = HashSet::new();
+        for &row in rows {
+            for found in roots::cache_roots(ctx, row, Platform::CURRENT) {
+                self.check_cancel()?;
+                let root = match found.root {
+                    Ok(root) => root,
+                    Err(reason) => {
+                        out.cache_skipped.push(Skipped {
+                            display_name: found.display_name,
+                            reason,
+                        });
+                        continue;
+                    }
+                };
+                if !seen.insert(root.id()) {
+                    continue;
+                }
+                let quit_first = found.app.is_some_and(|a| match &running {
+                    Ok(running) => running.contains(&a),
+                    Err(_) => true,
+                });
+                match self.cache(row, &root, found.display_name, found.app, quit_first)? {
+                    Some(Ok(candidate)) => out.caches.push(candidate),
+                    Some(Err(skipped)) => out.cache_skipped.push(skipped),
+                    None => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Moves to `stage` and says so at once: a tool or Docker can keep the
@@ -518,6 +584,9 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
         if row == CatalogId::WindowsThumbcache {
             return Ok(self.thumbcache(root, display_name).map(Ok));
         }
+        if row == CatalogId::ChromeOnDeviceModel {
+            return Ok(self.report_folder(row, root, display_name)?.map(Ok));
+        }
         let device = Some(root.id().device());
         let (facts, summary) = match self.judge(row, root.path(), device, false)? {
             Verdict::Skip(reason) => {
@@ -544,6 +613,278 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             candidate.labels.push(Label::QuitFirst);
         }
         Ok(Some(Ok(candidate)))
+    }
+
+    /// A folder shown with its size and never offered: no members are
+    /// recorded, and its scope cannot become a plan entry.
+    fn report_folder(
+        &mut self,
+        row: CatalogId,
+        root: &ValidRoot,
+        display_name: String,
+    ) -> std::result::Result<Option<Candidate>, ScanError> {
+        let summary = self.size(root, &[])?;
+        if summary.files == 0 {
+            return Ok(None);
+        }
+        let target = Target {
+            root: Some(root),
+            path: root.path(),
+            file_id: root.id(),
+            scope: Scope::Report,
+        };
+        Ok(Some(self.candidate(row, target, display_name, summary)))
+    }
+
+    /// The Projects tool (`project-build-folders`): walks the home for
+    /// dependency and build folders, matched by name and marker. Protected
+    /// folders, hidden folders, app folders, links, and other disks are
+    /// never entered. A matched folder is sized, not searched. Each one is
+    /// offered only inside source control, with its project's last
+    /// activity; the rest are shown as "not sure".
+    fn projects(&mut self, out: &mut Scan) -> std::result::Result<(), ScanError> {
+        let ctx = self.ctx;
+        let row = CatalogId::ProjectBuildFolders;
+        let home = ctx.home().to_path_buf();
+        if measure::is_network_volume(&home) {
+            note(out, row, NETWORK_HOME_PROJECTS.to_owned(), None);
+            return Ok(());
+        }
+        let Some(home_facts) = self.read_facts(&home) else {
+            return Ok(());
+        };
+        let device = home_facts.id.device();
+        let never: HashSet<PathBuf> = ctx.protected_paths().map(Path::to_path_buf).collect();
+        // Matched folders: the project folder, the folder's name, its kind.
+        let mut matched: Vec<(PathBuf, OsString, projects::Kind)> = Vec::new();
+        let mut stack = vec![(home.clone(), 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            ctx.visit(&dir);
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries {
+                self.check_cancel()?;
+                let Ok(entry) = entry else { continue };
+                let name = entry.file_name();
+                let path = entry.path();
+                if never.contains(&path) {
+                    continue;
+                }
+                // The home itself is never a project folder.
+                let kind = (dir != home)
+                    .then(|| projects::matches(&dir, &name))
+                    .flatten();
+                if kind.is_none() && projects::is_excluded(&name) {
+                    continue;
+                }
+                let Some(facts) = self.read_facts(&path) else {
+                    continue;
+                };
+                match (kind, facts.kind) {
+                    // A link with a matching name is reported as left alone.
+                    (Some(kind), Kind::Dir | Kind::Link) => matched.push((dir.clone(), name, kind)),
+                    (None, Kind::Dir) => {
+                        let same_disk = facts.id.device() == device;
+                        if same_disk
+                            && !ctx.is_protected_id(facts.id)
+                            && depth + 1 < projects::MAX_DEPTH
+                        {
+                            stack.push((path, depth + 1));
+                        }
+                    }
+                    // Counted, so the scan shows it is moving before the
+                    // first match.
+                    (_, Kind::File) => self.tick(0),
+                    _ => {}
+                }
+            }
+        }
+        matched.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+
+        // Each source-control root's last activity, read once.
+        let mut activity: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
+        let mut found: Vec<Candidate> = Vec::new();
+        for (dir, name, kind) in matched {
+            self.check_cancel()?;
+            let display_name = tool::home_relative(&home, &dir.join(&name));
+            let root = match policy::validate_cache_root(ctx, &dir) {
+                Ok(root) => root,
+                Err(reason) => {
+                    out.cache_skipped.push(Skipped {
+                        display_name,
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            let path = root.path().join(&name);
+            let device = Some(root.id().device());
+            let (facts, summary) = match self.judge(row, &path, device, true)? {
+                Verdict::Skip(reason) => {
+                    out.cache_skipped.push(Skipped {
+                        display_name,
+                        reason,
+                    });
+                    continue;
+                }
+                Verdict::Keep(facts, summary) => (facts, summary),
+            };
+            let target = Target {
+                root: Some(&root),
+                path: &path,
+                file_id: facts.id,
+                scope: Scope::Entry,
+            };
+            let mut candidate = self.candidate(row, target, display_name, summary);
+            match projects::eligible(&home, root.path(), kind) {
+                Err(why) => not_offered(&mut candidate, why.text()),
+                Ok(repo) => {
+                    let newest = match activity.get(&repo) {
+                        Some(newest) => *newest,
+                        None => {
+                            let newest = projects::last_activity(ctx, &repo, self.cancel)?;
+                            activity.insert(repo, newest);
+                            newest
+                        }
+                    };
+                    // A change dated in the future counts as today.
+                    let age = newest.and_then(|t| age_days(ctx.now(), t)).unwrap_or(0);
+                    let old =
+                        newest.is_some_and(|t| policy::is_old(t, t, ctx.now(), projects::OLD_AGE));
+                    candidate.age_days = Some(age);
+                    candidate.detail = Some(projects::activity_sentence(age, old));
+                    if old {
+                        candidate.labels.push(Label::OldProject);
+                        candidate.risk = Risk::Medium;
+                    } else {
+                        candidate.labels.push(Label::ActiveProject);
+                    }
+                }
+            }
+            found.push(candidate);
+        }
+        // Old projects first, then active ones, then what is not offered;
+        // the largest first in each.
+        found.sort_by_key(|c| {
+            let rank = if c.labels.contains(&Label::OldProject) {
+                0
+            } else if c.labels.contains(&Label::ActiveProject) {
+                1
+            } else {
+                2
+            };
+            (rank, Reverse(c.estimated_bytes))
+        });
+        out.caches.extend(found);
+        Ok(())
+    }
+
+    /// The Android tool: each emulator's Quick Boot snapshot
+    /// (`android-avd-snapshots`), the SDK's system images
+    /// (`android-unreferenced-images`: offered only when every emulator's
+    /// settings were read and none names the image), and one information
+    /// row per emulator (`android-emulators-report`).
+    fn android(&mut self, out: &mut Scan) -> std::result::Result<(), ScanError> {
+        let ctx = self.ctx;
+        let platform = Platform::CURRENT;
+        self.cache_rows(&[CatalogId::AndroidAvdSnapshots], out)?;
+
+        let emulators = android::emulators(ctx);
+        let images = android::images(ctx, platform);
+        let row = CatalogId::AndroidUnreferencedImages;
+        if !emulators.complete && !images.is_empty() {
+            note(out, row, EMULATORS_UNKNOWN.to_owned(), None);
+        }
+        for image in &images {
+            self.check_cancel()?;
+            let display_name = image.label();
+            let root = match policy::validate_cache_root(ctx, &image.parent) {
+                Ok(root) => root,
+                Err(reason) => {
+                    out.cache_skipped.push(Skipped {
+                        display_name,
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            let path = root.path().join(&image.key[2]);
+            let device = Some(root.id().device());
+            let (facts, summary) = match self.judge(row, &path, device, true)? {
+                Verdict::Skip(reason) => {
+                    out.cache_skipped.push(Skipped {
+                        display_name,
+                        reason,
+                    });
+                    continue;
+                }
+                Verdict::Keep(facts, summary) => (facts, summary),
+            };
+            let target = Target {
+                root: Some(&root),
+                path: &path,
+                file_id: facts.id,
+                scope: Scope::Entry,
+            };
+            let mut candidate = self.candidate(row, target, display_name, summary);
+            let users: Vec<&str> = emulators
+                .users(ctx, platform, image)
+                .iter()
+                .map(|avd| avd.name.as_str())
+                .collect();
+            if !emulators.complete {
+                not_offered(&mut candidate, IMAGE_UNKNOWN);
+            } else if users.is_empty() {
+                candidate.detail = Some(IMAGE_UNUSED.to_owned());
+            } else {
+                candidate.action = Action::Report;
+                candidate.risk = Risk::Info;
+                shown_only(&mut candidate);
+                candidate.detail = Some(format!("In use by {}.", list_words(&users)));
+            }
+            out.caches.push(candidate);
+        }
+
+        for avd in &emulators.avds {
+            self.check_cancel()?;
+            let Ok(root) = policy::validate_cache_root(ctx, &avd.dir) else {
+                continue;
+            };
+            let summary = self.size(&root, &[])?;
+            let target = Target {
+                root: Some(&root),
+                path: root.path(),
+                file_id: root.id(),
+                scope: Scope::Report,
+            };
+            let row = CatalogId::AndroidEmulatorsReport;
+            let mut candidate = self.candidate(row, target, avd.name.clone(), summary);
+            candidate.detail = Some(match &avd.images {
+                Some(keys) => {
+                    let labels: Vec<String> = keys.iter().map(android::label).collect();
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    format!(
+                        "Uses the system image {}. {EMULATOR_DATA}",
+                        list_words(&labels)
+                    )
+                }
+                None => {
+                    format!("Its settings do not say which system image it uses. {EMULATOR_DATA}")
+                }
+            });
+            out.caches.push(candidate);
+        }
+
+        if out.caches.is_empty() && out.cache_skipped.is_empty() && out.notes.is_empty() {
+            note(
+                out,
+                CatalogId::AndroidEmulatorsReport,
+                NO_ANDROID.to_owned(),
+                None,
+            );
+        }
+        Ok(())
     }
 
     /// Explorer's `thumbcache_*.db` files, summed. Shown, never cleaned.
@@ -1057,6 +1398,7 @@ impl<'a, F: FnMut(Progress)> Walk<'a, F> {
             covers: Vec::new(),
             kind: None,
             age_days: None,
+            detail: None,
             file_count: s.files,
             links_not_followed: s.links,
             labels,
@@ -1217,6 +1559,32 @@ fn newest(facts: &Facts) -> SystemTime {
 fn age_days(now: SystemTime, newest: SystemTime) -> Option<u32> {
     let age = now.duration_since(newest).ok()?;
     u32::try_from(age.as_secs() / 86_400).ok()
+}
+
+/// Shows a candidate without offering it, with the reason under the row.
+fn not_offered(candidate: &mut Candidate, why: &str) {
+    candidate.action = Action::None;
+    candidate.confidence = Confidence::Uncertain;
+    candidate.detail = Some(why.to_owned());
+    shown_only(candidate);
+}
+
+/// Makes a candidate report-only for good: its scope cannot become a plan
+/// entry, and the list of what is inside it, which only a delete needs, is
+/// dropped (a large dependency folder holds millions of entries).
+fn shown_only(candidate: &mut Candidate) {
+    candidate.scope = Scope::Report;
+    candidate.members = Arc::from([]);
+}
+
+/// "A", "A and B", "A, B, and C".
+fn list_words(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [one, two] => format!("{one} and {two}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
 }
 
 fn note(out: &mut Scan, row: CatalogId, text: String, bytes: Option<u64>) {

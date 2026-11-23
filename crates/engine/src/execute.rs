@@ -6,10 +6,12 @@
 //! handle, never through a full path.
 //!
 //! Three shapes of plan entry exist. A `user-temp` or `user-logs-old` entry
-//! is one name directly inside its root, removed whole. A cache entry is the
-//! cache folder itself: everything inside it is removed and the folder
-//! stays. A tool entry runs the row's fixed clean command through
-//! [`crate::tool`], after finding the same tool again (phase 8 item 4).
+//! is one name directly inside its root, removed whole; so is a project's
+//! dependency folder inside its project folder, and a system image inside
+//! its SDK folder. A cache entry is the cache folder itself: everything
+//! inside it is removed and the folder stays. A tool entry runs the row's
+//! fixed clean command through [`crate::tool`], after finding the same tool
+//! again (phase 8 item 4).
 
 use std::ffi::OsString;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -18,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::android;
 use crate::audit::{self, Audit};
 use crate::clock::Stamp;
 use crate::discover::CancelToken;
@@ -28,6 +31,7 @@ use crate::model::{
     ReportItem, ScanId, Scope, SkipCause, ToolAction,
 };
 use crate::policy::{self, CatalogId, Context, ValidRoot};
+use crate::projects;
 use crate::roots;
 use crate::tool::{self, Exit, LineSink};
 
@@ -424,11 +428,26 @@ fn delete_entry(ctx: &Context, entry: &PlanEntry) -> Done {
                 return Done::skipped(cause);
             }
         }
+        // A dependency or build folder: the project folder, the name, and
+        // the marker are all checked again, as the scan checked them.
+        (CatalogId::ProjectBuildFolders, Some(name)) => {
+            if let Err(cause) = projects::recheck(ctx, planned, name) {
+                return Done::skipped(cause);
+            }
+        }
+        // A system image: every emulator's settings are read again, and an
+        // image any of them names now stays.
+        (CatalogId::AndroidUnreferencedImages, Some(name)) => {
+            if let Err(cause) = android::recheck_image(ctx, planned, name) {
+                return Done::skipped(cause);
+            }
+        }
         (
             CatalogId::ThumbnailCache
             | CatalogId::FontCache
             | CatalogId::BrowserHttpCache
-            | CatalogId::IdeIndexCaches,
+            | CatalogId::IdeIndexCaches
+            | CatalogId::AndroidAvdSnapshots,
             None,
         ) => {
             let app = match roots::recheck(ctx, entry.catalog_id, planned) {

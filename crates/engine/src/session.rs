@@ -228,7 +228,7 @@ impl Engine {
                 scan_id,
                 status: ScanStatus::Running,
                 stages: discover::stages(mode),
-                progress: Progress::START,
+                progress: Progress::starting(mode),
                 duration_ms: 0,
                 error: None,
                 candidates: Vec::new(),

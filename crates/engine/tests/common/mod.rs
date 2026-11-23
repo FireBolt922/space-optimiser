@@ -210,14 +210,40 @@ pub fn execute(engine: &Engine, plan: &Plan, token: ConfirmationToken) -> Report
 }
 
 pub fn deep_scan(engine: &Engine) -> ScanView {
-    let scan_id = engine
-        .start_scan(StartScanArgs {
-            mode: ScanMode::Deep,
-        })
-        .unwrap();
+    scan_in(engine, ScanMode::Deep)
+}
+
+/// A finished scan in `mode`.
+pub fn scan_in(engine: &Engine, mode: ScanMode) -> ScanView {
+    let scan_id = engine.start_scan(StartScanArgs { mode }).unwrap();
     let view = engine.wait_for_scan(ScanRef { scan_id }).unwrap();
     assert_eq!(view.status, ScanStatus::Finished, "{:?}", view.error);
     view
+}
+
+/// Scan in `mode`, plan the named entries, confirm, execute.
+pub fn clean_in(engine: &Engine, mode: ScanMode, names: &[&str]) -> Report {
+    let view = scan_in(engine, mode);
+    let plan = plan(engine, &view, names);
+    let token = confirm(engine, &plan);
+    execute(engine, &plan, token)
+}
+
+/// The report line for the item called `name`.
+pub fn report_item<'a>(
+    report: &'a Report,
+    name: &str,
+) -> &'a space_optimiser_engine::model::ReportItem {
+    report
+        .items
+        .iter()
+        .find(|i| i.display_name == name)
+        .unwrap_or_else(|| panic!("no report item {name}"))
+}
+
+/// `days` from now, for a context clock or a file's modified time.
+pub fn days_ahead(days: u64) -> SystemTime {
+    SystemTime::now() + Duration::from_secs(days * 24 * 60 * 60)
 }
 
 /// Scan, plan the named entries, confirm, execute.

@@ -19,6 +19,10 @@ use crate::tool::Tool;
 pub enum ScanMode {
     Normal,
     Deep,
+    /// The Projects tool: dependency and build folders in projects.
+    Projects,
+    /// The Android tool: emulator snapshots and SDK system images.
+    Android,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -162,6 +166,10 @@ pub enum Label {
     /// The app that uses this cache is running (catalog "quit first" rows).
     /// The candidate's action is `none` until it quits.
     QuitFirst,
+    /// A folder in a project nothing changed in for 30 days or more.
+    OldProject,
+    /// A folder in a project that changed within the last 30 days.
+    ActiveProject,
 }
 
 /// What a candidate's delete covers.
@@ -217,8 +225,12 @@ pub struct Candidate {
     /// tool, Docker, and large-file rows.
     pub kind: Option<EntryKind>,
     /// Whole days since the entry or anything inside it last changed, for a
-    /// top-level temp or log entry.
+    /// top-level temp or log entry. For a project folder, whole days since
+    /// anything in its project last changed.
     pub age_days: Option<u32>,
+    /// One sentence about this row alone: how old its project is, which
+    /// emulator uses an image, or why it is not offered. None for most rows.
+    pub detail: Option<String>,
     pub file_count: u64,
     pub links_not_followed: u64,
     pub labels: Vec<Label>,
@@ -457,6 +469,13 @@ pub enum SkipCause {
     /// Docker no longer points at this computer.
     #[error("Docker now points to another machine")]
     DockerNotLocal,
+    /// An emulator's settings name this system image now.
+    #[error("an emulator uses this image now")]
+    ImageInUse,
+    /// The emulators' settings can no longer all be read, so an image in
+    /// use cannot be ruled out.
+    #[error("the emulators' settings could not be read")]
+    EmulatorsUnknown,
     #[error("{0}")]
     Entry(SkipReason),
     #[error("{0}")]

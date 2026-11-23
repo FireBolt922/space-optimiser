@@ -109,6 +109,8 @@ fn debug_roots(config: Config) -> Config {
         let mode = match mode {
             ScanMode::Normal => "normal",
             ScanMode::Deep => "deep",
+            ScanMode::Projects => "projects",
+            ScanMode::Android => "android",
         };
         for root in roots {
             eprintln!(

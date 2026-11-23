@@ -82,11 +82,31 @@ expected for a test build. Write down the exact warning you saw.
          "Quit … first" and cannot be checked. Quit it and scan again to
          see them offered. Rows name only cache folders, never `User`,
          settings, or `LocalHistory`.
-5. Try **Show in folder** on one row. Your file manager opens there.
-6. Keyboard: unplug or ignore the mouse. Can you scan, check a row, and
+5. If you use Chrome: Normal Scan may list an **On-device AI model**. It
+   has no checkbox.
+   - [ ] The text says what it is and how to turn it off in Chrome.
+6. Run **Scan projects** (Start screen, under Tools). Skip this if you do
+   not write code.
+   - [ ] Only `node_modules`, `target`, `.venv`/`venv`, and `.next` folders
+         are listed, each inside a project of yours.
+   - [ ] Nothing is ticked when the list opens, and **Select safe items**
+         cannot be pressed.
+   - [ ] A project you worked on this month is under **Active projects**;
+         one you have not touched for over a month is under **Old
+         projects**. Write down any that is in the wrong group.
+   - [ ] No folder from Documents, Desktop, or Downloads is listed.
+   - [ ] A folder under **Not offered** cannot be ticked and says why.
+7. Run **Scan Android**. Skip this if you never installed Android Studio.
+   - [ ] Each emulator you have is listed by name, with no checkbox.
+   - [ ] A system image an emulator uses says "In use by" that emulator
+         and has no checkbox.
+   - [ ] With an emulator running, its Quick Boot snapshot row says "Quit
+         Android Emulator first".
+8. Try **Show in folder** on one row. Your file manager opens there.
+9. Keyboard: unplug or ignore the mouse. Can you scan, check a row, and
    reach the review screen with Tab, Space, and Enter only?
-7. Windows only: start the app with right-click → **Run as administrator**.
-   - [ ] It refuses to scan and says why.
+10. Windows only: start the app with right-click → **Run as administrator**.
+    - [ ] It refuses to scan and says why.
 
 ## 5. One real cleanup (next day)
 

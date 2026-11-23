@@ -262,9 +262,12 @@ main,
   gap: var(--space-3);
 }
 @media (min-width: 760px) {
-  .install-grid,
-  .about-grid {
+  .install-grid {
     grid-template-columns: repeat(3, 1fr);
+  }
+  /* Four cards: two rows of two, not three and one. */
+  .about-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 .card {

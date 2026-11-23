@@ -32,18 +32,33 @@ and removes only the items you check and confirm.
   and a list of large files in your home folder.
   The large-file list is for information only; the app never removes those
   files. Deep Scan does not walk the whole disk.
+- Both scans show the **AI model Chrome keeps on this computer**, with its
+  size and how to turn it off in Chrome. The app does not remove it: while
+  the Chrome setting is on, Chrome downloads the model again.
+- **Projects** (a tool on the Start screen) finds `node_modules`, Rust
+  `target`, Python virtual environments, and `.next` folders in your
+  projects and marks each project Old or Active. A folder is offered only
+  inside a source-control folder (`.git`). After you remove one, the
+  project will not build or run until you run its install or build command
+  again. Projects in Documents, Desktop, and Downloads are not scanned.
+- **Android** (a tool) offers each emulator's Quick Boot snapshot and
+  system images that no emulator uses. Apps and data inside an emulator are
+  never removed.
 
 ## What it does not do
 
 - Cleanups run only after you review the list and confirm.
 - **Select safe items** picks only low-risk items: old temporary files,
   and on Ubuntu thumbnails and font caches (old logs on macOS in Deep
-  Scan). It does not include browser, editor, or package caches; check
-  those yourself if you want them removed.
+  Scan). It does not include browser, editor, or package caches, or
+  anything the Projects and Android tools find; check those yourself if you
+  want them removed.
 - Docker disk files (such as `Docker.raw`) and Docker volumes are not
   cleaned. The Trash and the Recycle Bin are not emptied.
-- Your documents, photos, downloads, and source code folders are outside
-  every cleanup rule.
+- Your documents, photos, downloads, and source code are outside every
+  cleanup rule. The Projects tool removes only the dependency and build
+  folders it names, and only the ones you check; it never removes a
+  project's own files.
 - The app does not run as administrator or root. If it is started that
   way, it refuses to scan.
 - The app does not upload a list of your files. It makes no network

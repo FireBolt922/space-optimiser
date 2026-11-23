@@ -40,6 +40,18 @@ function sizeText(c: Candidate): string {
   return formatBytes(c.estimated_bytes);
 }
 
+/**
+ * What "shared" means for this row. One file with another name elsewhere
+ * frees nothing. A folder can hold some such files (pnpm links packages from
+ * its store); they are left out of its size, and the rest is still freed.
+ */
+function sharedText(c: Candidate): string {
+  if (!c.labels.includes("shared")) return "";
+  return c.file_count > 1
+    ? " (files shared with another folder are not counted)"
+    : " (shared, frees nothing)";
+}
+
 /** One accessible name with the row's name, risk, and size (phase 11). */
 function checkboxName(c: Candidate): string {
   return `${c.display_name}, ${riskWord(c.risk)} risk, ${sizeText(c)}`;
@@ -76,6 +88,36 @@ function actionWord(c: Candidate): string {
       return "Not sure — not offered";
   }
 }
+
+/** Project folders, split by what the engine said about each project. */
+const PROJECT_GROUPS: {
+  id: string;
+  title: string;
+  description: string;
+  has: (c: Candidate) => boolean;
+}[] = [
+  {
+    id: "old",
+    title: "Old projects",
+    description:
+      "Nothing in these projects changed for 30 days or more. Each folder comes back when you run the project's install or build command.",
+    has: (c) => c.labels.includes("old_project"),
+  },
+  {
+    id: "active",
+    title: "Active projects",
+    description:
+      "These projects changed in the last 30 days. If you remove a folder here, run the install or build command before you next work on that project.",
+    has: (c) => c.labels.includes("active_project"),
+  },
+  {
+    id: "other",
+    title: "Not offered",
+    description:
+      "Shown so you can see where the space is. Space Optimiser could not tell that these are safe to recreate, so it leaves them to you.",
+    has: (c) => !c.labels.includes("old_project") && !c.labels.includes("active_project"),
+  },
+];
 
 interface Group {
   label: string;
@@ -184,8 +226,10 @@ export function Results({
 
   const renderRow = (c: Candidate) => {
     const detail = entryDetail(c);
+    // A project folder's name is a path, and its end says which folder it is.
+    const wraps = c.catalog_id === "project-build-folders";
     return (
-      <li key={c.id} className="row">
+      <li key={c.id} className={wraps ? "row row-path" : "row"}>
         {c.action === "report" ? (
           <span className="row-name file-name">{c.display_name}</span>
         ) : (
@@ -204,7 +248,7 @@ export function Results({
         <span className="body-sm ink-muted row-action">{actionWord(c)}</span>
         <span className="body-sm row-size">
           {sizeText(c)}
-          {c.labels.includes("shared") && " (shared, frees nothing)"}
+          {sharedText(c)}
         </span>
         {c.revealable ? (
           <button
@@ -220,6 +264,7 @@ export function Results({
           <span />
         )}
         {detail && <span className="body-sm ink-muted row-detail">{detail}</span>}
+        {c.detail && <span className="body-sm ink-muted row-detail">{c.detail}</span>}
         {c.found_by && <span className="body-sm ink-muted row-detail">{c.found_by}</span>}
         {revealErrors[c.id] && (
           <p className="body-sm row-detail row-error" role="alert">
@@ -299,6 +344,36 @@ export function Results({
         )}
       </>
     );
+  };
+
+  /** Project folders: old projects, active projects, and what is not offered. */
+  const projectRows = (label: string, rows: Candidate[]) =>
+    PROJECT_GROUPS.map((group) => ({ ...group, rows: rows.filter(group.has) }))
+      .filter((group) => group.rows.length > 0)
+      .map((group) => (
+        <div key={group.id} className="subgroup">
+          <div className="group-head">
+            <h3 className="heading">{group.title}</h3>
+            <span className="body-sm ink-muted">
+              {plural(group.rows.length, "folder", "folders")},{" "}
+              {formatBytes(categoryBytes(group.rows))}
+            </span>
+          </div>
+          <p className="body-sm ink-muted">{group.description}</p>
+          {folded(`${label}/${group.id}`, group.title, group.rows)}
+        </div>
+      ));
+
+  /** The rows of one group, laid out the way its catalog row reads best. */
+  const layout = (label: string, rows: Candidate[]) => {
+    switch (rows[0]?.catalog_id) {
+      case "user-temp":
+        return tempRows(label, rows);
+      case "project-build-folders":
+        return projectRows(label, rows);
+      default:
+        return folded(label, label, rows);
+    }
   };
 
   // Left alone: grouped by reason, largest group first.
@@ -393,10 +468,15 @@ export function Results({
                 : `${listWords(openApps)} are open, so their caches are not offered. Quit them, then scan again.`}
             </p>
           )}
-          {leftOut > 0 && (
+          {leftOut > 0 && anySafe && (
             <p className="body-sm ink-muted">
               {plural(leftOut, "other item was", "other items were")} left unselected. They need a
               separate choice because they cause a re-download or remove a cache an app is using.
+            </p>
+          )}
+          {leftOut > 0 && !anySafe && (
+            <p className="body-sm ink-muted">
+              Nothing here is selected for you. Tick each item you want removed.
             </p>
           )}
           {memoryRoot && (
@@ -424,9 +504,7 @@ export function Results({
                   {n.bytes !== null && ` (${formatBytes(n.bytes)})`}
                 </p>
               ))}
-              {rows.length > 0 && rows[0].catalog_id === "user-temp"
-                ? tempRows(label, rows)
-                : folded(label, label, rows)}
+              {layout(label, rows)}
             </section>
           ))}
         </>

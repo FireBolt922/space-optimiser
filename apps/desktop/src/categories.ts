@@ -3,7 +3,8 @@
 // offered, and the UI still sends ids only.
 import type { Candidate } from "./engine";
 
-export type CategoryId = "temporary" | "browser" | "developer" | "system" | "logs" | "large";
+export type CategoryId =
+  "temporary" | "browser" | "developer" | "projects" | "android" | "system" | "logs" | "large";
 
 export interface Category {
   id: CategoryId;
@@ -20,6 +21,16 @@ export const CATEGORIES: Category[] = [
     title: "Developer tools",
     blurb: "Package and build caches. The next install or build downloads again.",
   },
+  {
+    id: "projects",
+    title: "Projects",
+    blurb: "Dependency and build folders. The project's install or build command recreates them.",
+  },
+  {
+    id: "android",
+    title: "Android",
+    blurb: "Emulator snapshots and system images. Emulator apps and data are never removed.",
+  },
   { id: "system", title: "System caches", blurb: "The system rebuilds these when needed." },
   { id: "logs", title: "Logs", blurb: "Old log files that nothing reads any more." },
   { id: "large", title: "Large files", blurb: "Shown so you can decide. Never removed." },
@@ -28,6 +39,11 @@ export const CATEGORIES: Category[] = [
 const BY_CATALOG_ID: Record<string, CategoryId> = {
   "user-temp": "temporary",
   "browser-http-cache": "browser",
+  "chrome-on-device-model": "browser",
+  "project-build-folders": "projects",
+  "android-avd-snapshots": "android",
+  "android-unreferenced-images": "android",
+  "android-emulators-report": "android",
   "thumbnail-cache": "system",
   "windows-thumbcache": "system",
   "font-cache": "system",

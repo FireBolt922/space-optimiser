@@ -247,9 +247,17 @@ const ABOUT = `
             for information only.</p>
         </article>
         <article class="card">
+          <h3 class="heading">Projects and Android</h3>
+          <p class="body-sm muted">Two tools you run on their own. Projects finds
+            <code>node_modules</code>, Rust <code>target</code>, Python environments, and
+            <code>.next</code> folders and shows which projects you have not touched for 30
+            days. Android offers emulator Quick Boot snapshots and system images no emulator
+            uses.</p>
+        </article>
+        <article class="card">
           <h3 class="heading">What it leaves alone</h3>
           <p class="body-sm muted">Documents, photos, downloads, source code, the Trash, Docker
-            volumes, virtual disks, settings, and passwords. It does not ask for an administrator
+            volumes, virtual disks, emulator data, settings, and passwords. It does not ask for an administrator
             password and does not upload a list of your files.</p>
         </article>
       </div>
