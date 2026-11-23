@@ -19,6 +19,9 @@ target/
 # Node.js and the TypeScript UI
 node_modules/
 .pnpm-store/
+# The lock files here are npm's (package-lock.json). A pnpm install leaves
+# this one behind; CI and Dependabot do not keep it up to date.
+pnpm-lock.yaml
 .npm/
 .yarn/
 .pnp.*
