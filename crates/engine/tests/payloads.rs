@@ -11,6 +11,18 @@ fn start_scan_accepts_a_mode() {
     assert_eq!(args.mode, ScanMode::Deep);
 }
 
+// The two tools added in v0.5 are modes too: a tool is chosen by name,
+// never by a folder.
+#[test]
+fn start_scan_accepts_the_projects_and_android_tools() {
+    let args: StartScanArgs = serde_json::from_str(r#"{"mode":"projects"}"#).unwrap();
+    assert_eq!(args.mode, ScanMode::Projects);
+    let args: StartScanArgs = serde_json::from_str(r#"{"mode":"android"}"#).unwrap();
+    assert_eq!(args.mode, ScanMode::Android);
+    let with_folder = r#"{"mode":"projects","folder":"/Users/me/Projects"}"#; // hygiene: data only
+    assert!(serde_json::from_str::<StartScanArgs>(with_folder).is_err());
+}
+
 #[test]
 fn start_scan_rejects_extra_roots() {
     let err = serde_json::from_str::<StartScanArgs>(r#"{"mode":"normal","roots":["/"]}"#);

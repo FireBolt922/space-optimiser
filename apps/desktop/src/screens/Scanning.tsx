@@ -18,6 +18,8 @@ const STAGE_NAMES: Record<ScanStage, string> = {
   tools: "Developer tool caches",
   docker: "Docker",
   large_files: "Large files",
+  projects: "Project folders",
+  android: "Android emulators and system images",
 };
 
 /** What the scan is doing now, as one sentence. */
@@ -35,6 +37,10 @@ function doing(stage: ScanStage, detail: string | null): string {
       return "Asking Docker how much space it uses.";
     case "large_files":
       return "Looking for large files in your home folder.";
+    case "projects":
+      return "Looking for dependency and build folders in your projects.";
+    case "android":
+      return "Checking Android emulators and system images.";
   }
 }
 

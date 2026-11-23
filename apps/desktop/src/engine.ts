@@ -2,7 +2,8 @@
 // path: the engine owns paths and re-checks them before any delete.
 import { invoke } from "@tauri-apps/api/core";
 
-export type ScanMode = "normal" | "deep";
+/** The two scans, and the two tools that each look at one area. */
+export type ScanMode = "normal" | "deep" | "projects" | "android";
 export type Risk = "low" | "medium" | "high" | "info";
 export type Action = "delete" | "run_tool" | "report" | "none";
 export type Platform = "macos" | "windows" | "linux";
@@ -23,11 +24,19 @@ export interface Candidate {
   covers: number[];
   /** File or folder, for a top-level temp or log entry; null for other rows. */
   kind: "file" | "folder" | null;
-  /** Whole days since the entry or anything in it changed (temp and log rows). */
+  /**
+   * Whole days since the entry or anything in it changed (temp and log rows).
+   * For a project folder: whole days since anything in its project changed.
+   */
   age_days: number | null;
+  /**
+   * One sentence about this row alone: how old its project is, which emulator
+   * uses an image, or why it is not offered. Null for most rows.
+   */
+  detail: string | null;
   file_count: number;
   links_not_followed: number;
-  labels: ("shared" | "logical_size" | "quit_first")[];
+  labels: ("shared" | "logical_size" | "quit_first" | "old_project" | "active_project")[];
   /** The app to quit before this cache is cleaned ("Chrome", "VS Code"); null otherwise. */
   quit_app: string | null;
   risk: Risk;
@@ -60,7 +69,8 @@ export interface Note {
 }
 
 /** A part of a scan, in the order the engine runs them. */
-export type ScanStage = "temp" | "caches" | "logs" | "tools" | "docker" | "large_files";
+export type ScanStage =
+  "temp" | "caches" | "logs" | "tools" | "docker" | "large_files" | "projects" | "android";
 
 export interface DockerImage {
   repository: string;

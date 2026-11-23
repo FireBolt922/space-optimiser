@@ -5,11 +5,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import App from "./App";
 import {
   CANDIDATES,
+  ANDROID_CANDIDATES,
+  ON_DEVICE_MODEL,
+  PROJECT_CANDIDATES,
   REPORT,
   XSS_NAME,
+  androidScan,
   deepScan,
   fakeEngine,
   finishedScan,
+  projectsScan,
 } from "./test/fakeEngine";
 
 afterEach(cleanup);
@@ -49,11 +54,21 @@ async function toReview(engine = fakeEngine()) {
 }
 
 describe("start", () => {
-  it("leads with Deep Scan and offers Normal Scan", async () => {
+  it("leads with Deep Scan, then Normal Scan, then the two tools", async () => {
     render(<App engine={fakeEngine()} />);
     const main = await screen.findByRole("main");
     const buttons = await within(main).findAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Deep Scan", "Normal Scan"]);
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Deep Scan",
+      "Normal Scan",
+      "Scan projects",
+      "Scan Android",
+    ]);
+    // One primary button per view.
+    expect(buttons.filter((b) => b.classList.contains("button-primary"))).toHaveLength(1);
+    expect(buttons[0].classList.contains("button-primary")).toBe(true);
+    expect(within(main).getByRole("heading", { name: "Scans" })).toBeTruthy();
+    expect(within(main).getByRole("heading", { name: "Tools" })).toBeTruthy();
   });
 
   it("reports an interrupted run from an earlier session", async () => {
@@ -1034,5 +1049,257 @@ describe("categories and long lists", () => {
     const failedSection = screen.getByRole("region", { name: "Failed" });
     expect(within(failedSection).getByText("Failed (11 items)")).toBeTruthy();
     expect(failedSection.querySelector("details")!.open).toBe(true);
+  });
+});
+
+// The tools added in v0.5: Projects, Android, and the on-device AI model row.
+describe("projects tool", () => {
+  async function toProjects(engine = fakeEngine({ scan: projectsScan() })) {
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Scan projects" }));
+    await screen.findByRole("heading", { name: "Results" });
+    return engine;
+  }
+
+  it("starts the projects mode, and Scan again reruns it", async () => {
+    const engine = await toProjects();
+    const header = screen.getByRole("heading", { name: "Results" }).parentElement!;
+    fireEvent.click(within(header).getByRole("button", { name: "Scan again" }));
+    await waitFor(() => expect(engine.startScan).toHaveBeenCalledTimes(2));
+    expect(engine.startScan.mock.calls.map((c) => c[0])).toEqual(["projects", "projects"]);
+  });
+
+  it("says what it is doing while it scans", async () => {
+    const engine = fakeEngine({
+      scanRuns: true,
+      scanProgress: {
+        files_seen: 9_001,
+        bytes_seen: 1_200_000_000,
+        stage: "projects",
+        detail: null,
+      },
+      scanStages: ["projects"],
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Scan projects" }));
+    expect(
+      await screen.findByText("Looking for dependency and build folders in your projects."),
+    ).toBeTruthy();
+    const stages = within(screen.getByRole("list", { name: "Scan stages" }))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(stages).toEqual(["Project foldersChecking"]);
+  });
+
+  it("groups folders into old projects, active projects, and not offered", async () => {
+    await toProjects();
+    const group = screen.getByRole("region", { name: "Project folders" });
+    const headings = within(group)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent);
+    expect(headings).toEqual(["Old projects", "Active projects", "Not offered"]);
+    expect(within(group).getByText("1 folder, 1.8 GB")).toBeTruthy();
+    expect(within(group).getByText("1 folder, 5.5 GB")).toBeTruthy();
+  });
+
+  it("each row says how old its project is, with its risk as a word", async () => {
+    await toProjects();
+    expect(screen.getByText("Old project: nothing in it changed for 94 days.")).toBeTruthy();
+    expect(screen.getByText("Active project: last changed 2 days ago.")).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "~/Projects/old-shop/node_modules, Medium risk, 1.8 GB",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "~/Projects/engine/target, High risk, 5.5 GB" }),
+    ).toBeTruthy();
+  });
+
+  it("a project folder's path is shown whole, not cut short", async () => {
+    await toProjects();
+    const row = box("~/Tools/some-app/resources/app/node_modules").closest("li")!;
+    expect(row.classList.contains("row-path")).toBe(true);
+  });
+
+  // pnpm hard-links packages from its store: those files are not freed and
+  // not counted, but the rest of the folder is.
+  it("a folder with files shared from a package store says they are not counted", async () => {
+    const shared = PROJECT_CANDIDATES.map((c) =>
+      c.id === 60 ? { ...c, labels: [...c.labels, "shared" as const], file_count: 41_000 } : c,
+    );
+    await toProjects(fakeEngine({ scan: finishedScan({ candidates: shared, skipped: [] }) }));
+    const row = box("~/Projects/old-shop/node_modules").closest("li")!;
+    expect(row.textContent).toContain("1.8 GB (files shared with another folder are not counted)");
+    expect(row.textContent).not.toContain("frees nothing");
+  });
+
+  it("a folder outside source control is shown, says why, and cannot be chosen", async () => {
+    await toProjects();
+    const row = box("~/Tools/some-app/resources/app/node_modules");
+    expect(row.disabled).toBe(true);
+    expect(screen.getByText(/Not inside a source-control folder/)).toBeTruthy();
+    expect(screen.getByText("Not sure — not offered")).toBeTruthy();
+  });
+
+  it("nothing is preselected and Select safe items has nothing to select", async () => {
+    await toProjects();
+    for (const checkbox of screen.getAllByRole("checkbox") as HTMLInputElement[]) {
+      expect(checkbox.checked).toBe(false);
+    }
+    const safe = screen.getByRole("button", { name: "Select safe items" }) as HTMLButtonElement;
+    expect(safe.disabled).toBe(true);
+    expect(
+      screen.getByText("Nothing here is selected for you. Tick each item you want removed."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/left unselected/)).toBeNull();
+    expect((screen.getByRole("button", { name: "Review" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("a chosen folder goes to review with the consequence written out", async () => {
+    const engine = await toProjects();
+    fireEvent.click(box("~/Projects/old-shop/node_modules"));
+    expect(screen.getByText(/^1 item selected, about 1\.8 GB/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    expect(engine.buildPlan).toHaveBeenCalledWith(7, [60]);
+    expect(
+      screen.getByText(/will not build or run until you run its install or build command again/),
+    ).toBeTruthy();
+    expect(screen.getByText(/This cannot be undone/)).toBeTruthy();
+  });
+});
+
+describe("android tool", () => {
+  async function toAndroid(engine = fakeEngine({ scan: androidScan() })) {
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Scan Android" }));
+    await screen.findByRole("heading", { name: "Results" });
+    return engine;
+  }
+
+  it("starts the android mode and names its stage", async () => {
+    const engine = fakeEngine({
+      scanRuns: true,
+      scanProgress: { files_seen: 12, bytes_seen: 1, stage: "android", detail: null },
+      scanStages: ["android"],
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Scan Android" }));
+    expect(await screen.findByText("Checking Android emulators and system images.")).toBeTruthy();
+    expect(engine.startScan).toHaveBeenCalledWith("android");
+  });
+
+  it("an image in use names its emulator and has no checkbox", async () => {
+    await toAndroid();
+    expect(screen.getByText("In use by Pixel 9.")).toBeTruthy();
+    expect(
+      screen.queryByRole("checkbox", {
+        name: /^android-36\.1 — google_apis_playstore — arm64-v8a, /,
+      }),
+    ).toBeNull();
+  });
+
+  it("an unused image can be chosen and is marked High", async () => {
+    await toAndroid();
+    expect(screen.getByText("No emulator uses this image.")).toBeTruthy();
+    const unused = screen.getByRole("checkbox", {
+      name: "android-30 — default — x86_64, High risk, 4.1 GB",
+    }) as HTMLInputElement;
+    expect(unused.disabled).toBe(false);
+    expect(unused.checked).toBe(false);
+  });
+
+  it("a running emulator keeps its snapshot back", async () => {
+    await toAndroid();
+    expect(box("Pixel 9 — Quick Boot snapshot").disabled).toBe(true);
+    expect(screen.getByText("Quit Android Emulator first")).toBeTruthy();
+  });
+
+  it("each emulator is listed for information and says its data is never removed", async () => {
+    await toAndroid();
+    const group = screen.getByRole("region", { name: "Android emulators" });
+    expect(within(group).queryByRole("checkbox")).toBeNull();
+    expect(
+      within(group).getByText(/Apps and data inside the emulator are never removed/),
+    ).toBeTruthy();
+    expect(within(group).getByText("18.0 GB")).toBeTruthy();
+  });
+
+  it("the rows sit under Android and Projects categories of their own", async () => {
+    const mixed = finishedScan({
+      candidates: [...CANDIDATES, ...ANDROID_CANDIDATES, ...PROJECT_CANDIDATES],
+    });
+    await toAndroid(fakeEngine({ scan: mixed }));
+    const chips = within(screen.getByRole("group", { name: "Categories" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(chips).toContain("Android (4, 30.9 GB)");
+    expect(chips).toContain("Projects (3, 7.6 GB)");
+    fireEvent.click(screen.getByRole("button", { name: /^Android \(/ }));
+    expect(screen.getByRole("region", { name: "Android system images" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Project folders" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Temporary files" })).toBeNull();
+  });
+});
+
+describe("on-device AI model", () => {
+  async function toModel() {
+    const engine = fakeEngine({
+      scan: finishedScan({ candidates: [...CANDIDATES, ON_DEVICE_MODEL] }),
+    });
+    render(<App engine={engine} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Normal Scan" }));
+    await screen.findByRole("heading", { name: "Results" });
+    return engine;
+  }
+
+  it("is shown with its size, what it is, and how to turn it off", async () => {
+    await toModel();
+    const group = screen.getByRole("region", { name: "On-device AI model" });
+    expect(within(group).getByText("1 item, 4.0 GB")).toBeTruthy();
+    const text = group.textContent ?? "";
+    expect(text).toContain("An AI model that Chrome downloaded to this computer");
+    expect(text).toContain('search for "On-device AI"');
+    expect(text).toContain("Chrome downloads it again");
+  });
+
+  it("cannot be chosen, and Select safe items leaves it alone", async () => {
+    const engine = await toModel();
+    const group = screen.getByRole("region", { name: "On-device AI model" });
+    expect(within(group).queryByRole("checkbox")).toBeNull();
+    expect(within(group).getByText("Show only")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select safe items" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByRole("heading", { name: "Review" });
+    const ids = engine.buildPlan.mock.calls[0][1];
+    expect(ids).not.toContain(ON_DEVICE_MODEL.id);
+  });
+
+  it("can be shown in its folder and sits under Browsers", async () => {
+    const engine = await toModel();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show in folder: Google Chrome — on-device AI model" }),
+    );
+    await waitFor(() => expect(engine.reveal).toHaveBeenCalledWith(ON_DEVICE_MODEL.id));
+    fireEvent.click(screen.getByRole("button", { name: /^Browsers \(/ }));
+    expect(screen.getByRole("region", { name: "On-device AI model" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Temporary files" })).toBeNull();
+  });
+});
+
+describe("help for the tools", () => {
+  it("explains Projects, Android, and the on-device model", async () => {
+    render(<App engine={fakeEngine()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Help" }));
+    const text = screen.getByRole("main").textContent ?? "";
+    expect(text).toContain("Projects and Android");
+    expect(text).toContain("source-control folder (.git)");
+    expect(text).toContain("Quick Boot snapshot");
+    expect(text).toContain("never removed");
+    expect(text).toContain("Chrome would download it again");
+    expect(text).not.toContain(ABSOLUTE_PROMISE);
   });
 });

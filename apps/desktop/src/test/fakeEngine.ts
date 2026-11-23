@@ -27,6 +27,7 @@ function candidate(over: Partial<Candidate> & Pick<Candidate, "id" | "display_na
     covers: [],
     kind: null,
     age_days: null,
+    detail: null,
     file_count: 1,
     links_not_followed: 0,
     labels: [],
@@ -163,6 +164,137 @@ export const DEEP_CANDIDATES: Candidate[] = [
   }),
 ];
 
+const PROJECT_ROW = {
+  catalog_id: "project-build-folders",
+  location_label: "Project folders",
+  explanation:
+    "Dependency and build folders inside your projects: node_modules, Rust target, Python virtual environments, and .next.",
+  bulk_safe: false,
+} as const;
+
+/** The Projects tool: an old project, an active one, and a folder outside source control. */
+export const PROJECT_CANDIDATES: Candidate[] = [
+  candidate({
+    ...PROJECT_ROW,
+    id: 60,
+    display_name: "~/Projects/old-shop/node_modules",
+    estimated_bytes: 1_800_000_000,
+    risk: "medium",
+    labels: ["old_project"],
+    age_days: 94,
+    detail: "Old project: nothing in it changed for 94 days.",
+  }),
+  candidate({
+    ...PROJECT_ROW,
+    id: 61,
+    display_name: "~/Projects/engine/target",
+    estimated_bytes: 5_500_000_000,
+    risk: "high",
+    labels: ["active_project"],
+    age_days: 2,
+    detail: "Active project: last changed 2 days ago.",
+  }),
+  candidate({
+    ...PROJECT_ROW,
+    id: 62,
+    display_name: "~/Tools/some-app/resources/app/node_modules",
+    estimated_bytes: 300_000_000,
+    risk: "high",
+    confidence: "uncertain",
+    action: "none",
+    detail:
+      "Not inside a source-control folder (.git), so Space Optimiser cannot tell that it belongs to a project of yours. Not offered.",
+  }),
+];
+
+/** The Android tool: a blocked snapshot, an unused image, an image in use, an emulator. */
+export const ANDROID_CANDIDATES: Candidate[] = [
+  candidate({
+    id: 70,
+    display_name: "Pixel 9 — Quick Boot snapshot",
+    catalog_id: "android-avd-snapshots",
+    location_label: "Emulator snapshots",
+    explanation: "The saved state an Android emulator uses to start quickly.",
+    estimated_bytes: 2_600_000_000,
+    risk: "medium",
+    bulk_safe: false,
+    action: "none",
+    labels: ["quit_first"],
+    quit_app: "Android Emulator",
+  }),
+  candidate({
+    id: 71,
+    display_name: "android-30 — default — x86_64",
+    catalog_id: "android-unreferenced-images",
+    location_label: "Android system images",
+    explanation: "Android system images in your SDK.",
+    estimated_bytes: 4_100_000_000,
+    risk: "high",
+    bulk_safe: false,
+    detail: "No emulator uses this image.",
+  }),
+  candidate({
+    id: 72,
+    display_name: "android-36.1 — google_apis_playstore — arm64-v8a",
+    catalog_id: "android-unreferenced-images",
+    location_label: "Android system images",
+    explanation: "Android system images in your SDK.",
+    estimated_bytes: 6_200_000_000,
+    risk: "info",
+    bulk_safe: false,
+    action: "report",
+    detail: "In use by Pixel 9.",
+  }),
+  candidate({
+    id: 73,
+    display_name: "Pixel 9",
+    catalog_id: "android-emulators-report",
+    location_label: "Android emulators",
+    explanation: "Your Android emulators and the space each takes.",
+    estimated_bytes: 18_000_000_000,
+    risk: "info",
+    bulk_safe: false,
+    action: "report",
+    detail:
+      "Uses the system image android-36.1 — google_apis_playstore — arm64-v8a. Apps and data inside the emulator are never removed.",
+  }),
+];
+
+/** Chrome's on-device AI model, as Normal Scan and Deep Scan report it. */
+export const ON_DEVICE_MODEL: Candidate = candidate({
+  id: 80,
+  display_name: "Google Chrome — on-device AI model",
+  catalog_id: "chrome-on-device-model",
+  location_label: "On-device AI model",
+  explanation:
+    'An AI model that Chrome downloaded to this computer for its built-in AI features. To remove it, open Chrome\'s settings, search for "On-device AI", and turn it off. Chrome then deletes the model. If you delete the folder yourself, Chrome downloads it again.',
+  estimated_bytes: 4_000_000_000,
+  file_count: 6,
+  risk: "info",
+  bulk_safe: false,
+  action: "report",
+});
+
+export function projectsScan(): ScanView {
+  return finishedScan({
+    stages: ["projects"],
+    progress: { files_seen: 48_210, bytes_seen: 7_600_000_000, stage: "projects", detail: null },
+    candidates: PROJECT_CANDIDATES,
+    skipped: [],
+    roots: [],
+  });
+}
+
+export function androidScan(): ScanView {
+  return finishedScan({
+    stages: ["android"],
+    progress: { files_seen: 312, bytes_seen: 30_900_000_000, stage: "android", detail: null },
+    candidates: ANDROID_CANDIDATES,
+    skipped: [],
+    roots: [],
+  });
+}
+
 export const DEV_ASSETS: DevAssets = {
   docker: {
     images: [
@@ -255,8 +387,16 @@ export function finishedScan(over: Partial<ScanView> = {}): ScanView {
   };
 }
 
+/** The engine's review sentence for the rows that have their own. */
+const ACTION_TEXT: Record<string, string> = {
+  "project-build-folders":
+    "Delete this folder. The project will not build or run until you run its install or build command again.",
+  "android-unreferenced-images":
+    "Delete this Android system image. No emulator uses it, and Android Studio can download it again.",
+};
+
 export function planFor(ids: number[]): Plan {
-  const all = [...CANDIDATES, ...DEEP_CANDIDATES];
+  const all = [...CANDIDATES, ...DEEP_CANDIDATES, ...PROJECT_CANDIDATES, ...ANDROID_CANDIDATES];
   const items = all
     .filter((c) => ids.includes(c.id))
     .map((c) => ({
@@ -266,7 +406,8 @@ export function planFor(ids: number[]): Plan {
       action_text:
         c.action === "run_tool"
           ? "Run the tool's own clean command."
-          : "Delete this item from your temporary folder. Everything in it is more than a day old.",
+          : (ACTION_TEXT[c.catalog_id] ??
+            "Delete this item from your temporary folder. Everything in it is more than a day old."),
       estimated_bytes: c.estimated_bytes,
       upper_bound_bytes: c.upper_bound_bytes,
       file_count: c.file_count,

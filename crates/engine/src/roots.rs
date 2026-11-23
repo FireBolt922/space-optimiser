@@ -46,7 +46,8 @@ use crate::model::{Platform, SkipCause};
 use crate::policy::{self, CatalogId, Context, SkipReason, ValidRoot};
 
 /// An app that must be quit before its cache is cleaned: a browser for
-/// `browser-http-cache`, an editor for `ide-index-caches`.
+/// `browser-http-cache`, an editor for `ide-index-caches`, the Android
+/// emulator for `android-avd-snapshots`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum App {
@@ -70,10 +71,11 @@ pub enum App {
     RubyMine,
     DataSpell,
     Aqua,
+    AndroidEmulator,
 }
 
 impl App {
-    const ALL: [App; 20] = [
+    const ALL: [App; 21] = [
         App::Chrome,
         App::Edge,
         App::Brave,
@@ -94,6 +96,7 @@ impl App {
         App::RubyMine,
         App::DataSpell,
         App::Aqua,
+        App::AndroidEmulator,
     ];
 
     /// The name shown to the person ("Quit VS Code first").
@@ -119,6 +122,7 @@ impl App {
             App::RubyMine => "RubyMine",
             App::DataSpell => "DataSpell",
             App::Aqua => "Aqua",
+            App::AndroidEmulator => "Android Emulator",
         }
     }
 
@@ -126,9 +130,41 @@ impl App {
     /// any of them is. Linux names are `comm`, cut to 15 bytes. Editor
     /// helpers ("Code Helper (Renderer)") are not the editor. A JetBrains
     /// IDE started through an old `idea.sh` shows as `java` and is not
-    /// seen; the catalog row says so.
+    /// seen; the catalog row says so. The Android emulator runs as QEMU
+    /// (`qemu-system-<arch>`, with a `-headless` variant) started by
+    /// `emulator`; another QEMU also counts, which only keeps a row back.
     const fn processes(self, platform: Platform) -> &'static [&'static str] {
         match (self, platform) {
+            (App::AndroidEmulator, Platform::Macos) => &[
+                "qemu-system-aarch64",
+                "qemu-system-aarch64-headless",
+                "qemu-system-x86_64",
+                "qemu-system-x86_64-headless",
+                "qemu-system-i386",
+                "qemu-system-i386-headless",
+                "qemu-system-armel",
+                "qemu-system-armel-headless",
+                "emulator",
+            ],
+            // `comm` is cut to 15 bytes, so each name covers its variants.
+            (App::AndroidEmulator, Platform::Linux) => &[
+                "qemu-system-x86",
+                "qemu-system-aar",
+                "qemu-system-i38",
+                "qemu-system-arm",
+                "emulator",
+            ],
+            (App::AndroidEmulator, Platform::Windows) => &[
+                "qemu-system-x86_64.exe",
+                "qemu-system-x86_64-headless.exe",
+                "qemu-system-aarch64.exe",
+                "qemu-system-aarch64-headless.exe",
+                "qemu-system-i386.exe",
+                "qemu-system-i386-headless.exe",
+                "qemu-system-armel.exe",
+                "qemu-system-armel-headless.exe",
+                "emulator.exe",
+            ],
             (App::VsCode, Platform::Macos) => &["Code"],
             (App::VsCode, Platform::Linux) => &["code"],
             (App::VsCode, Platform::Windows) => &["Code.exe"],
@@ -248,7 +284,9 @@ pub fn cache_roots(ctx: &Context, row: CatalogId, platform: Platform) -> Vec<Cac
             fixed(ctx, &explorer, "Explorer thumbnails", &mut found);
         }
         (CatalogId::BrowserHttpCache, platform) => browsers(ctx, platform, &mut found),
+        (CatalogId::ChromeOnDeviceModel, platform) => on_device_models(ctx, platform, &mut found),
         (CatalogId::IdeIndexCaches, platform) => editors(ctx, platform, &mut found),
+        (CatalogId::AndroidAvdSnapshots, _) => quick_boot_snapshots(ctx, &mut found),
         (CatalogId::PkgNpx, Platform::Windows) => {
             let npx = join(ctx.local_app_data(), "npm-cache/_npx");
             fixed(ctx, &npx, "~/AppData/Local/npm-cache/_npx", &mut found);
@@ -404,9 +442,30 @@ fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
 
+/// Whether `path` itself is a folder: not a link (even one to a folder),
+/// not another reparse point, not a file, and not missing.
+pub(crate) fn is_real_folder(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !is_reparse_point(&m))
+}
+
+/// Whether every folder from just below `base` down to `path` is a real
+/// folder ([`is_real_folder`]). `base` itself is trusted (the home, or
+/// Local AppData). A fixed location reached through a link is a different
+/// place from the one the catalog names.
+pub(crate) fn real_folders_below(base: &Path, path: &Path) -> bool {
+    let Ok(below) = path.strip_prefix(base) else {
+        return false;
+    };
+    let mut current = base.to_path_buf();
+    below.components().all(|part| {
+        current.push(part);
+        is_real_folder(&current)
+    })
+}
+
 /// The names of the folders directly inside `dir`, sorted. Links are left
 /// out: a profile is never reached through one.
-fn folders(ctx: &Context, dir: &Path) -> Vec<String> {
+pub(crate) fn folders(ctx: &Context, dir: &Path) -> Vec<String> {
     ctx.visit(dir);
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -465,6 +524,59 @@ fn browsers(ctx: &Context, platform: Platform, found: &mut Vec<CacheRoot>) {
             let name = format!("{} — {profile}", install.label);
             add(ctx, &path, name, Some(App::Firefox), found);
         }
+    }
+}
+
+/// The folder Chrome keeps its on-device AI model in, directly inside the
+/// user-data folder and beside the profiles (`chrome-on-device-model`).
+const ON_DEVICE_MODEL: &str = "OptGuideOnDeviceModel";
+
+/// Google Chrome's on-device AI model, one per installed channel. Only
+/// Chrome: the folder name is not verified for other Chromium browsers.
+fn on_device_models(ctx: &Context, platform: Platform, found: &mut Vec<CacheRoot>) {
+    let home = ctx.home();
+    for &(browser, label, mac, linux, windows) in VENDORS {
+        if browser != App::Chrome {
+            continue;
+        }
+        let user_data = match platform {
+            Platform::Macos if !mac.is_empty() => {
+                join(&join(home, "Library/Application Support"), mac)
+            }
+            Platform::Linux if !linux.is_empty() => join(&join(home, ".config"), linux),
+            Platform::Windows if !windows.is_empty() => {
+                join(ctx.local_app_data(), windows).join("User Data")
+            }
+            _ => continue,
+        };
+        let name = format!("{label} — on-device AI model");
+        add(ctx, &user_data.join(ON_DEVICE_MODEL), name, None, found);
+    }
+}
+
+/// Each emulator's Quick Boot snapshot folder (`android-avd-snapshots`).
+/// Snapshots saved by hand sit beside it and are never listed. The row is
+/// exactly `<name>.avd/snapshots/default_boot`: when `snapshots` is a link,
+/// that name would mean a folder somewhere else, so it is left alone.
+fn quick_boot_snapshots(ctx: &Context, found: &mut Vec<CacheRoot>) {
+    for avd in crate::android::emulators(ctx).avds {
+        let snapshots = avd.dir.join("snapshots");
+        ctx.visit(&snapshots);
+        if fs::symlink_metadata(&snapshots).is_err() {
+            continue;
+        }
+        let name = format!("{} — Quick Boot snapshot", avd.name);
+        let app = Some(App::AndroidEmulator);
+        if !is_real_folder(&snapshots) {
+            found.push(CacheRoot {
+                display_name: name,
+                app,
+                root: Err(SkipReason::Link),
+            });
+            continue;
+        }
+        let path = snapshots.join(crate::android::QUICK_BOOT);
+        add(ctx, &path, name, app, found);
     }
 }
 

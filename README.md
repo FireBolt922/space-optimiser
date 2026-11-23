@@ -6,7 +6,7 @@
 
 **Download:** [firebolt922.github.io/space-optimiser](https://firebolt922.github.io/space-optimiser/) lists the latest build for each system and every earlier one.
 
-Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. It cleans a fixed list of caches and temporary files on macOS, Ubuntu, and Windows. Test builds are unsigned and not yet released for general use.
+Space Optimiser is a desktop application in development that helps a person review reclaimable disk space and confirm only the cleanups they want. It cleans a fixed list of caches and temporary files on macOS, Ubuntu, and Windows, and can show and remove the dependency folders of your projects and unused Android emulator files when you choose them. Test builds are unsigned and not yet released for general use.
 
 The product is independent and general purpose. It is not tied to any existing project.
 
@@ -30,7 +30,7 @@ The only cleanups measured so far were on one Apple Silicon Mac. Windows and Ubu
 
 ## Workflow
 
-1. Choose Normal Scan or Deep Scan.
+1. Choose Normal Scan or Deep Scan, or one of the tools: Projects or Android.
 2. Scan. The app does not delete anything while scanning.
 3. Read each result: what it is, where it is, how much space it might recover, and what can go wrong.
 4. Select items, or use "Select safe items" for the low-risk items that allow it.
@@ -68,7 +68,13 @@ Milestones M1 to M7 are merged: the engine, the Normal and Deep Scan rows below,
 
 **Deep Scan** adds developer caches (npm, npx, pnpm, Yarn, pip, uv, Cargo, Gradle, NuGet), editor caches (VS Code, Cursor, and JetBrains IDEs, only when the editor is not running), old log files on macOS, the Docker build cache when Docker runs locally, and a list of large files in the home folder. The large-file list is information only.
 
-"Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan).
+Both scans also show the AI model Chrome keeps on the computer, with its size and how to turn it off in Chrome. It is information only: while the Chrome setting is on, a deleted model is downloaded again.
+
+**Projects** (a tool, not part of either scan) finds `node_modules`, Rust `target`, Python virtual environments, and `.next` folders. A folder is matched by its name and a marker beside it (`package.json`, `Cargo.toml` with Cargo's `CACHEDIR.TAG`, `pyvenv.cfg`) and is offered only inside a source-control folder, so an installed app's own `node_modules` is never offered. Each project is marked Old (nothing changed for 30 days) or Active. Projects in Documents, Desktop, and Downloads are not scanned. No tool is run inside a project.
+
+**Android** (a tool) offers each emulator's Quick Boot snapshot and the SDK system images that no emulator's settings name. Emulator apps and data, and snapshots saved by hand, are never offered.
+
+"Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan). It never picks anything the Projects and Android tools find.
 
 Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it; the catalog of cleanup rules is summarised in `docs/release-notes-draft.md` and in the engine's `crates/engine/src/policy.rs`.
 

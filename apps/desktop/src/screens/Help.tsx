@@ -18,7 +18,9 @@ export function Help({ info }: Props) {
         </h2>
         <p className="body-sm">
           Normal Scan is for everyone. It checks temporary files, thumbnails, font caches, and
-          browser caches.
+          browser caches. It also shows the AI model Chrome keeps on this computer, with its size
+          and how to turn it off in Chrome. Space Optimiser does not remove the model: while the
+          setting is on, Chrome would download it again.
         </p>
         <p className="body-sm">
           Deep Scan is for developers. It does everything Normal Scan does, and also checks package
@@ -28,6 +30,29 @@ export function Help({ info }: Props) {
         </p>
         <p className="body-sm ink-muted">
           A scan only looks. Nothing is removed until you review the list and confirm.
+        </p>
+      </section>
+
+      <section className="card stack" aria-labelledby="help-tools">
+        <h2 id="help-tools" className="title">
+          Projects and Android
+        </h2>
+        <p className="body-sm">
+          Projects looks for the folders a project can recreate: node_modules, Rust target, Python
+          virtual environments, and .next. It offers a folder only when it is inside a
+          source-control folder (.git), so an installed app that ships its own node_modules is left
+          alone. Each project is marked Old when nothing in it changed for 30 days, or Active.
+          Projects in Documents, Desktop, and Downloads are not scanned.
+        </p>
+        <p className="body-sm">
+          After you remove one of these folders, the project will not build or run until you run its
+          install or build command again, such as npm install or cargo build.
+        </p>
+        <p className="body-sm">
+          Android offers each emulator&apos;s Quick Boot snapshot, which costs one full boot, and
+          system images that no emulator uses. An image an emulator uses is shown with that
+          emulator&apos;s name and cannot be chosen. Apps and data inside an emulator, and snapshots
+          you saved yourself, are never removed.
         </p>
       </section>
 
@@ -41,8 +66,9 @@ export function Help({ info }: Props) {
         </p>
         <p className="body-sm">
           It leaves out items that cause a download again or that an open app is using, such as
-          browser caches, editor caches, package caches, and tool commands. You can still choose
-          those one at a time. Items marked &ldquo;Not sure — not offered&rdquo; cannot be chosen.
+          browser caches, editor caches, package caches, and tool commands. It also leaves out
+          everything the Projects and Android tools find. You can still choose those one at a time.
+          Items marked &ldquo;Not sure — not offered&rdquo; cannot be chosen.
         </p>
       </section>
 

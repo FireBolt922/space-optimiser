@@ -1,4 +1,5 @@
-# Catalog row ids in the first release (Normal Scan and Deep Scan sections).
+# Catalog row ids in the engine: Normal Scan, Deep Scan, and the tools added
+# in v0.5 (Projects, Android, and the on-device AI model report).
 # Changing a row id in the catalog means changing this list and the Rust
 # `CatalogId` enum in the same change. Checked by crates/engine/tests/policy.rs.
 "user-temp"
@@ -19,3 +20,8 @@
 "docker-build-cache"
 "large-files-report"
 "ide-index-caches"
+"chrome-on-device-model"
+"project-build-folders"
+"android-avd-snapshots"
+"android-unreferenced-images"
+"android-emulators-report"

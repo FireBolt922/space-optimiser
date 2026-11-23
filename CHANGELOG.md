@@ -7,6 +7,35 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **Projects**, a new tool on the Start screen. It finds the folders a
+  project can recreate (`node_modules`, Rust `target`, Python virtual
+  environments, and `.next`) and marks each project Old when nothing in it
+  changed for 30 days, or Active. A folder is matched by its name and a
+  marker file next to it, and is offered only inside a source-control folder
+  (`.git`), so an installed app that ships its own `node_modules` is shown
+  but never offered. Nothing is preselected, and Select safe items leaves
+  these folders alone. Projects in Documents, Desktop, and Downloads are not
+  scanned.
+- **Android**, a new tool on the Start screen. It offers each emulator's
+  Quick Boot snapshot (one full boot to get it back) and system images that
+  no emulator uses. Each emulator's own settings are read to decide which
+  image it uses; if any cannot be read, no image is offered. An image in use
+  is shown with its emulator's name. Apps and data inside an emulator, and
+  snapshots you saved yourself, are never removed.
+- Normal Scan and Deep Scan show the AI model Chrome keeps on this computer
+  (about 4 GB where it was measured), with its size and how to turn it off
+  in Chrome's settings. It is shown for information: while the setting is
+  on, Chrome downloads the model again if the folder is deleted.
+
+### Changed
+
+- The Start screen lists two scans (Deep Scan, Normal Scan) and two tools
+  (Projects, Android) instead of two scans.
+- A result row can carry one sentence of its own, such as "Old project:
+  nothing in it changed for 94 days." or "In use by Pixel 9."
+
 ## [0.4.0] - 2026-10-13
 
 ### Added

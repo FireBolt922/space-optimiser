@@ -41,12 +41,41 @@ fn each_mode_lists_its_stages_in_scan_order() {
             Stage::LargeFiles,
         ]
     );
+    assert_eq!(discover::stages(ScanMode::Projects), [Stage::Projects]);
+    assert_eq!(discover::stages(ScanMode::Android), [Stage::Android]);
+}
+
+// A tool's scan starts in its own stage, so the window never says
+// "Checking temporary files" for a scan that does not check them.
+#[test]
+fn a_tool_scan_starts_and_ends_in_its_own_stage() {
+    let home = common::basic_home();
+    let engine = home.tool_engine();
+    for (mode, stage, name) in [
+        (ScanMode::Projects, Stage::Projects, "projects"),
+        (ScanMode::Android, Stage::Android, "android"),
+    ] {
+        assert_eq!(Progress::starting(mode).stage, stage);
+        let scan_id = engine.start_scan(StartScanArgs { mode }).unwrap();
+        let view = engine.wait_for_scan(ScanRef { scan_id }).unwrap();
+        assert_eq!(view.stages, [stage]);
+        assert_eq!(view.progress.stage, stage);
+        assert!(view.roots.is_empty(), "{mode:?} read a temp root");
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["stages"][0], name);
+    }
+    assert_eq!(Progress::starting(ScanMode::Deep).stage, Stage::Temp);
 }
 
 #[test]
 fn progress_walks_through_every_stage_even_when_a_stage_finds_nothing() {
     let home = common::basic_home();
-    for mode in [ScanMode::Normal, ScanMode::Deep] {
+    for mode in [
+        ScanMode::Normal,
+        ScanMode::Deep,
+        ScanMode::Projects,
+        ScanMode::Android,
+    ] {
         let progress = reported(mode, &home.with_fake_tools(home.old_context()));
         assert_eq!(first_seen(&progress), discover::stages(mode), "{mode:?}");
     }

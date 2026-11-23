@@ -15,8 +15,8 @@ use crate::measure::{self, Facts, FileId, Kind};
 use crate::model::{Action, Risk};
 use crate::tool::ToolEnv;
 
-/// First-release catalog rows. `fixtures/catalog-mvp-ids.txt` lists the same
-/// ids; a test fails if they drift.
+/// The catalog rows. `fixtures/catalog-mvp-ids.txt` lists the same ids; a
+/// test fails if they drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CatalogId {
@@ -38,10 +38,21 @@ pub enum CatalogId {
     DockerBuildCache,
     IdeIndexCaches,
     LargeFilesReport,
+    /// The AI model Chrome keeps in its user-data folder. Shown only.
+    ChromeOnDeviceModel,
+    /// `node_modules`, Rust `target`, Python environments, and `.next`
+    /// inside a project (the Projects tool).
+    ProjectBuildFolders,
+    /// An emulator's Quick Boot snapshot (the Android tool).
+    AndroidAvdSnapshots,
+    /// SDK system images; one no emulator references can be removed.
+    AndroidUnreferencedImages,
+    /// One row per emulator with its size. Shown only.
+    AndroidEmulatorsReport,
 }
 
 impl CatalogId {
-    pub const ALL: [CatalogId; 18] = [
+    pub const ALL: [CatalogId; 23] = [
         CatalogId::UserTemp,
         CatalogId::ThumbnailCache,
         CatalogId::WindowsThumbcache,
@@ -60,6 +71,11 @@ impl CatalogId {
         CatalogId::DockerBuildCache,
         CatalogId::IdeIndexCaches,
         CatalogId::LargeFilesReport,
+        CatalogId::ChromeOnDeviceModel,
+        CatalogId::ProjectBuildFolders,
+        CatalogId::AndroidAvdSnapshots,
+        CatalogId::AndroidUnreferencedImages,
+        CatalogId::AndroidEmulatorsReport,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -82,6 +98,11 @@ impl CatalogId {
             CatalogId::DockerBuildCache => "docker-build-cache",
             CatalogId::IdeIndexCaches => "ide-index-caches",
             CatalogId::LargeFilesReport => "large-files-report",
+            CatalogId::ChromeOnDeviceModel => "chrome-on-device-model",
+            CatalogId::ProjectBuildFolders => "project-build-folders",
+            CatalogId::AndroidAvdSnapshots => "android-avd-snapshots",
+            CatalogId::AndroidUnreferencedImages => "android-unreferenced-images",
+            CatalogId::AndroidEmulatorsReport => "android-emulators-report",
         }
     }
 
@@ -91,7 +112,13 @@ impl CatalogId {
             | CatalogId::ThumbnailCache
             | CatalogId::FontCache
             | CatalogId::UserLogsOld => Risk::Low,
-            CatalogId::WindowsThumbcache | CatalogId::LargeFilesReport => Risk::Info,
+            CatalogId::WindowsThumbcache
+            | CatalogId::LargeFilesReport
+            | CatalogId::ChromeOnDeviceModel
+            | CatalogId::AndroidEmulatorsReport => Risk::Info,
+            // A project folder in an old project is shown as medium; see
+            // `discover`. An image in use is shown as info.
+            CatalogId::ProjectBuildFolders | CatalogId::AndroidUnreferencedImages => Risk::High,
             _ => Risk::Medium,
         }
     }
@@ -103,7 +130,10 @@ impl CatalogId {
 
     pub const fn action(self) -> Action {
         match self {
-            CatalogId::WindowsThumbcache | CatalogId::LargeFilesReport => Action::Report,
+            CatalogId::WindowsThumbcache
+            | CatalogId::LargeFilesReport
+            | CatalogId::ChromeOnDeviceModel
+            | CatalogId::AndroidEmulatorsReport => Action::Report,
             CatalogId::PkgNpmCache
             | CatalogId::PkgPnpmStore
             | CatalogId::PkgYarnCache
@@ -168,6 +198,21 @@ impl CatalogId {
             CatalogId::LargeFilesReport => {
                 "Large files in your home folder. Shown so you can decide; never removed."
             }
+            CatalogId::ChromeOnDeviceModel => {
+                "An AI model that Chrome downloaded to this computer for its built-in AI features. To remove it, open Chrome's settings, search for \"On-device AI\", and turn it off. Chrome then deletes the model. If you delete the folder yourself, Chrome downloads it again."
+            }
+            CatalogId::ProjectBuildFolders => {
+                "Dependency and build folders inside your projects: node_modules, Rust target, Python virtual environments, and .next. The project's install or build command recreates them. Projects in Documents, Desktop, and Downloads are not scanned."
+            }
+            CatalogId::AndroidAvdSnapshots => {
+                "The saved state an Android emulator uses to start quickly. The emulator does a full boot next time and saves a new one. Apps and data in the emulator are not touched."
+            }
+            CatalogId::AndroidUnreferencedImages => {
+                "Android system images in your SDK. An image is offered only when no emulator in the standard folder uses it. If you keep emulators somewhere else, check them first. Android Studio can download an image again."
+            }
+            CatalogId::AndroidEmulatorsReport => {
+                "Your Android emulators and the space each takes. Shown so you can decide; apps and data inside an emulator are never removed. Delete an emulator you no longer need in Android Studio's Device Manager."
+            }
         }
     }
 
@@ -179,6 +224,15 @@ impl CatalogId {
                     "Delete this item from your temporary folder. Everything in it is more than a day old."
                 }
                 CatalogId::UserLogsOld => "Delete log files more than 30 days old.",
+                CatalogId::ProjectBuildFolders => {
+                    "Delete this folder. The project will not build or run until you run its install or build command again."
+                }
+                CatalogId::AndroidAvdSnapshots => {
+                    "Delete this emulator's Quick Boot snapshot. Its next start is a full boot."
+                }
+                CatalogId::AndroidUnreferencedImages => {
+                    "Delete this Android system image. No emulator uses it, and Android Studio can download it again."
+                }
                 _ => "Delete these cache files.",
             },
             Action::RunTool => "Run the tool's own clean command.",
@@ -211,10 +265,21 @@ impl CatalogId {
                 "The next build can be slower. Docker may need a restart before the Mac or Windows disk file shrinks.",
             ),
             CatalogId::UserLogsOld => Some("Log files older than 30 days were removed."),
+            CatalogId::ProjectBuildFolders => {
+                Some("Run the project's install or build command to recreate the folder.")
+            }
+            CatalogId::AndroidAvdSnapshots => {
+                Some("That emulator does a full boot the next time it starts.")
+            }
+            CatalogId::AndroidUnreferencedImages => Some(
+                "Android Studio downloads the image again if you create an emulator that needs it.",
+            ),
             CatalogId::ThumbnailCache
             | CatalogId::WindowsThumbcache
             | CatalogId::FontCache
-            | CatalogId::LargeFilesReport => None,
+            | CatalogId::LargeFilesReport
+            | CatalogId::ChromeOnDeviceModel
+            | CatalogId::AndroidEmulatorsReport => None,
         }
     }
 
@@ -266,16 +331,24 @@ impl CatalogId {
             CatalogId::DockerBuildCache => "Docker build cache",
             CatalogId::IdeIndexCaches => "Editor cache",
             CatalogId::LargeFilesReport => "Large files",
+            CatalogId::ChromeOnDeviceModel => "On-device AI model",
+            CatalogId::ProjectBuildFolders => "Project folders",
+            CatalogId::AndroidAvdSnapshots => "Emulator snapshots",
+            CatalogId::AndroidUnreferencedImages => "Android system images",
+            CatalogId::AndroidEmulatorsReport => "Android emulators",
         }
     }
 
     /// Whether a folder holding a project marker (`.git`, `package.json`,
     /// ...) is skipped. Package caches hold packages, which carry those
     /// files by design, inside fixed tool-owned roots (catalog denylist).
+    /// So does a project's dependency folder, which is found by its own
+    /// marker instead.
     pub const fn checks_project_markers(self) -> bool {
         !matches!(
             self,
-            CatalogId::PkgNpx
+            CatalogId::ProjectBuildFolders
+                | CatalogId::PkgNpx
                 | CatalogId::PkgCargoCache
                 | CatalogId::PkgGradleCaches
                 | CatalogId::PkgNugetHttp
