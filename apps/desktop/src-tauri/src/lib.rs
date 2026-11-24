@@ -4,7 +4,8 @@
 //! `get_scan` and `get_run`. Commands that start a process or write a file
 //! (`reveal`, `export_report`) run off the main thread, as do the Overview's
 //! readings (`system_usage`, `disk_usage`), which read the process list and
-//! the disk.
+//! the disk. Updates (phase 15) are checked and installed by `updater`,
+//! which uses Tauri's signed updater from Rust only.
 
 use std::path::PathBuf;
 
@@ -20,6 +21,8 @@ use space_optimiser_engine::{
     platform,
 };
 use tauri::{Manager, State};
+
+mod updater;
 
 type CommandResult<T> = Result<T, EngineError>;
 
@@ -95,6 +98,12 @@ fn system_usage(monitor: State<'_, Monitor>) -> SystemUsage {
 #[tauri::command(async)]
 fn disk_usage(engine: State<'_, Engine>) -> CommandResult<DiskUsage> {
     engine.disk_usage()
+}
+
+/// Opens the fixed download page (phase 15). Takes nothing.
+#[tauri::command(async)]
+fn open_download_page(engine: State<'_, Engine>) -> CommandResult<()> {
+    engine.open_download_page()
 }
 
 /// This computer's folders. Debug builds can point the engine at a copy of
@@ -183,6 +192,9 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // Used from Rust only (updater.rs); no capability grants the
+        // webview its commands.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             match InstanceLock::acquire(&dir) {
@@ -197,6 +209,7 @@ pub fn run() {
             }
             app.manage(engine(dir.join("audit")));
             app.manage(Monitor::new());
+            app.manage(updater::Updates::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -213,7 +226,12 @@ pub fn run() {
             export_report,
             app_info,
             system_usage,
-            disk_usage
+            disk_usage,
+            open_download_page,
+            updater::check_for_update,
+            updater::update_status,
+            updater::install_update,
+            updater::restart_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running Space Optimiser");

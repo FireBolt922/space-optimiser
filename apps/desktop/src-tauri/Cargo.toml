@@ -17,3 +17,7 @@ tauri-build.workspace = true
 [dependencies]
 space-optimiser-engine = { path = "../../../crates/engine" }
 tauri.workspace = true
+tauri-plugin-updater.workspace = true
+serde.workspace = true
+# `generate_context!` writes the plugin config as JSON.
+serde_json.workspace = true

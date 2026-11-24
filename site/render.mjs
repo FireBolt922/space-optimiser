@@ -52,9 +52,11 @@ export function prepareReleases(apiReleases) {
           downloads[key] = { name: a.name, url: a.browser_download_url, size: formatSize(a.size) };
         }
       }
+      const manifest = (r.assets ?? []).find((a) => a.name === "latest.json");
       return {
         version: r.tag_name.replace(/^v/, ""),
         tag: r.tag_name,
+        updater: manifest ? manifest.browser_download_url : null,
         title: r.name || r.tag_name,
         url: r.html_url,
         date: r.published_at.slice(0, 10),
@@ -62,6 +64,35 @@ export function prepareReleases(apiReleases) {
         downloads,
       };
     });
+}
+
+/**
+ * The newest published release that carries an updater manifest. Its
+ * latest.json is served at the page's root for the app's "Check for
+ * updates" (phase 15). Prereleases count; drafts were dropped above.
+ */
+export function updaterSource(releases) {
+  const release = releases.find((r) => r.updater);
+  return release ? { version: release.version, url: release.updater } : null;
+}
+
+/** Throws unless `manifest` is for `version`, signed, and points at this repo's releases. */
+export function checkManifest(manifest, version, repo) {
+  if (manifest?.version !== version) {
+    throw new Error(`latest.json version ${manifest?.version} is not ${version}`);
+  }
+  const platforms = Object.entries(manifest.platforms ?? {});
+  if (platforms.length === 0) throw new Error("latest.json lists no platform");
+  const prefix = `https://github.com/${repo}/releases/download/v${version}/`;
+  for (const [key, entry] of platforms) {
+    if (typeof entry?.url !== "string" || !entry.url.startsWith(prefix)) {
+      throw new Error(`latest.json ${key} url is not a ${repo} v${version} download`);
+    }
+    if (typeof entry.signature !== "string" || entry.signature.trim() === "") {
+      throw new Error(`latest.json ${key} has no signature`);
+    }
+  }
+  return manifest;
 }
 
 function esc(value) {

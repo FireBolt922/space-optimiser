@@ -1,8 +1,11 @@
+import type { ComponentProps } from "react";
 import type { ThemeChoice } from "../theme";
+import { UpdatesSection } from "../components/UpdatesSection";
 
 interface Props {
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  updates: ComponentProps<typeof UpdatesSection>;
 }
 
 const CHOICES: { value: ThemeChoice; label: string; hint?: string }[] = [
@@ -11,8 +14,9 @@ const CHOICES: { value: ThemeChoice; label: string; hint?: string }[] = [
   { value: "system", label: "Match system" },
 ];
 
-// Settings has no primary action: a choice applies as soon as it is made.
-export function Settings({ theme, onTheme }: Props) {
+// A choice applies as soon as it is made. The only primary button is the
+// update action, shown once a check found a new version.
+export function Settings({ theme, onTheme, updates }: Props) {
   return (
     <section className="screen" aria-labelledby="settings-title">
       <h1 id="settings-title" className="title-xl" tabIndex={-1}>
@@ -39,6 +43,7 @@ export function Settings({ theme, onTheme }: Props) {
           Match system follows the light or dark setting of your computer.
         </p>
       </fieldset>
+      <UpdatesSection {...updates} />
     </section>
   );
 }

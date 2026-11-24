@@ -60,5 +60,14 @@
         "type": "downloadBootstrapper"
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDMkY3RjAxQUM5NUVDQjkKUldTNTdKV3NBWDh2dkV2SHhGMDV1MzR0NUhkWE55S0tsVGhjNVVnWWExanlFUDJDQWtHZzBYNm4K",
+      "endpoints": ["https://firebolt922.github.io/space-optimiser/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

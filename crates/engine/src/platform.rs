@@ -26,6 +26,38 @@ pub fn reveal_command(target: &Path) -> Option<RevealCommand> {
     sys::reveal_command(target)
 }
 
+/// The download page "Check for updates" opens when the app cannot update
+/// itself (phase 15). A fixed address: no command takes a URL.
+pub const DOWNLOAD_PAGE: &str = "https://firebolt922.github.io/space-optimiser/";
+
+/// The OS command that opens `url` in the default browser: `open` on
+/// macOS, `xdg-open` on Linux, Explorer on Windows. None when it is missing.
+pub fn open_url_command(url: &str) -> Option<RevealCommand> {
+    sys::open_url_command(url)
+}
+
+/// Whether this user may create and rename entries in `dir`. The updater
+/// replaces the app in place only then, so it never asks for an
+/// administrator password (phase 15).
+pub fn is_writable_dir(dir: &Path) -> bool {
+    sys::is_writable_dir(dir)
+}
+
+/// `access(W_OK)` on a folder: the same check the kernel makes for a
+/// rename into it, for this user, without creating anything.
+#[cfg(unix)]
+fn unix_writable_dir(dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    if !std::fs::metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return false;
+    }
+    let Ok(c_path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c_path` is NUL-terminated.
+    unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+}
+
 /// The person's Downloads folder, if it exists. Reports are saved there;
 /// the folder is never created.
 pub(crate) fn downloads_dir(ctx: &Context) -> Option<PathBuf> {
@@ -194,6 +226,17 @@ mod sys {
         })
     }
 
+    pub fn open_url_command(url: &str) -> Option<RevealCommand> {
+        Some(RevealCommand {
+            program: PathBuf::from("/usr/bin/open"),
+            args: vec![OsString::from(url)],
+        })
+    }
+
+    pub fn is_writable_dir(dir: &Path) -> bool {
+        super::unix_writable_dir(dir)
+    }
+
     pub fn downloads_dir(ctx: &Context) -> Option<PathBuf> {
         Some(ctx.home().join("Downloads"))
     }
@@ -250,6 +293,21 @@ mod sys {
             program,
             args: vec![folder.as_os_str().to_owned()],
         })
+    }
+
+    pub fn open_url_command(url: &str) -> Option<RevealCommand> {
+        let program = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file()))?;
+        Some(RevealCommand {
+            program,
+            args: vec![OsString::from(url)],
+        })
+    }
+
+    pub fn is_writable_dir(dir: &Path) -> bool {
+        super::unix_writable_dir(dir)
     }
 
     /// `XDG_DOWNLOAD_DIR` from `user-dirs.dirs` (it may be localised),
@@ -347,6 +405,21 @@ mod sys {
             program,
             args: vec![arg],
         })
+    }
+
+    /// Explorer opens a URL in the default browser.
+    pub fn open_url_command(url: &str) -> Option<RevealCommand> {
+        let program = known_folder(&FOLDERID_Windows).ok()?.join("explorer.exe");
+        Some(RevealCommand {
+            program,
+            args: vec![OsString::from(url)],
+        })
+    }
+
+    /// Not used to choose how to update on Windows: the installer the
+    /// person chose replaces the app. A read-only folder is not writable.
+    pub fn is_writable_dir(dir: &Path) -> bool {
+        std::fs::metadata(dir).is_ok_and(|m| m.is_dir() && !m.permissions().readonly())
     }
 
     /// The Downloads Known Folder, which follows redirection.

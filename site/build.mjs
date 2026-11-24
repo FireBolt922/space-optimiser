@@ -10,7 +10,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { prepareReleases, renderPage } from "./render.mjs";
+import { checkManifest, prepareReleases, renderPage, updaterSource } from "./render.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -64,6 +64,18 @@ for (const [from, to] of files) {
   await copyFile(join(root, from), join(out, to));
 }
 await writeFile(join(out, "index.html"), renderPage(releases, { repo: values.repo }));
+
+// The app's updater reads latest.json from here, so prereleases (which
+// GitHub's releases/latest link skips) can update too. Checked before it
+// is served; a bad manifest fails the deploy instead of breaking updates.
+const source = updaterSource(releases);
+if (source && !values.releases) {
+  const res = await fetch(source.url);
+  if (!res.ok) throw new Error(`GET ${source.url}: ${res.status}`);
+  const manifest = checkManifest(await res.json(), source.version, values.repo);
+  await writeFile(join(out, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`Wrote ${join(out, "latest.json")} for ${source.version}`);
+}
 
 console.log(
   `Wrote ${join(out, "index.html")}: ${releases.length} published release(s)` +

@@ -77,6 +77,8 @@ Both scans also show the AI model Chrome keeps on the computer, with its size an
 
 "Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan). It never picks anything the Projects and Android tools find.
 
+**Updates**: Settings → Check for updates asks the download page for the newest version, only when you press it or, if you turn it on, at start. On macOS and Windows the app downloads the update, verifies its signature against the key in `tauri.conf.json`, and installs it; on Ubuntu it opens the download page. Releases are signed for the updater by the publish workflow (`TAURI_SIGNING_PRIVATE_KEY`), which also publishes `latest.json`; the download page serves the newest one.
+
 Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it; the catalog of cleanup rules is summarised in `docs/release-notes-draft.md` and in the engine's `crates/engine/src/policy.rs`.
 
 ## Development

@@ -14,6 +14,7 @@ import type {
   RunView,
   ScanView,
   SystemUsage,
+  UpdateView,
 } from "../engine";
 
 export const XSS_NAME = "<img src=x onerror=alert(1)>";
@@ -533,6 +534,16 @@ export const DISK_USAGE: DiskUsage = {
   used_bytes: 312_000_000_000,
 };
 
+/** A check that found 0.6.0, installable from the app. */
+export const UPDATE_AVAILABLE: Extract<UpdateView, { state: "available" }> = {
+  state: "available",
+  version: "0.6.0",
+  current_version: "0.1.0",
+  notes: `### Added\n\n- **Overview**, a new first page. ${XSS_NAME}`,
+  date: "2026-11-24",
+  route: "in_app",
+};
+
 export interface FakeOptions {
   scan?: ScanView;
   /** The scan stays "running" until it is cancelled. */
@@ -551,10 +562,19 @@ export interface FakeOptions {
   systemUsage?: SystemUsage;
   systemError?: EngineError;
   diskError?: EngineError;
+  /** What check_for_update returns; up to date by default. */
+  updateCheck?: UpdateView;
+  /** What update_status returns after Install, one per poll; the last repeats. */
+  updateProgress?: UpdateView[];
+  installError?: EngineError;
+  restartError?: EngineError;
 }
 
 export function fakeEngine(options: FakeOptions = {}) {
   let cancelled = false;
+  let update: UpdateView = { state: "idle" };
+  let installed = false;
+  const progress = [...(options.updateProgress ?? [])];
   const executes = [...(options.execute ?? [{ status: "started" as const }])];
   const engine = {
     startScan: vi.fn<Engine["startScan"]>(async () => 7),
@@ -622,6 +642,25 @@ export function fakeEngine(options: FakeOptions = {}) {
       if (options.diskError) throw options.diskError;
       return DISK_USAGE;
     }),
+    checkForUpdate: vi.fn(async (): Promise<UpdateView> => {
+      update = options.updateCheck ?? { state: "up_to_date", current_version: "0.1.0" };
+      return update;
+    }),
+    updateStatus: vi.fn(async (): Promise<UpdateView> => {
+      if (installed && progress.length > 0)
+        update = progress.length > 1 ? progress.shift()! : progress[0];
+      return update;
+    }),
+    installUpdate: vi.fn(async (): Promise<UpdateView> => {
+      if (options.installError) throw options.installError;
+      installed = true;
+      update = progress.length > 1 ? progress.shift()! : (progress[0] ?? update);
+      return update;
+    }),
+    restartApp: vi.fn(async () => {
+      if (options.restartError) throw options.restartError;
+    }),
+    openDownloadPage: vi.fn(async () => {}),
   } satisfies Engine;
   return engine;
 }

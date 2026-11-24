@@ -39,7 +39,11 @@ unsigned and are not supported once the next build is published.
   deleting virtual-disk images.
 - Running a shell command, or a tool with arguments that are not fixed.
 - Elevation (running as root or administrator).
-- Any network request made by the app itself.
+- Any network request made by the app itself, other than the update check
+  (Settings → Check for updates, or at start when turned on), which fetches
+  `latest.json` from the download page and sends no paths or file names.
+- An update installed without a valid signature from the project's updater
+  key, or installed while a scan or cleanup is running.
 - A Tauri command that accepts a path from the window.
 
 ## What is out of scope

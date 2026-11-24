@@ -261,6 +261,28 @@ export interface DiskUsage {
   used_bytes: number;
 }
 
+/** How a found update gets installed. Only `in_app` installs from the app. */
+export type InstallRoute = "in_app" | "linux_package" | "app_folder_locked" | "not_installed";
+
+/** The updater's state, kept by the shell so a view change loses nothing. */
+export type UpdateView =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "up_to_date"; current_version: string }
+  | {
+      state: "available";
+      version: string;
+      current_version: string;
+      /** Plain text from the changelog; rendered as text. */
+      notes: string | null;
+      date: string | null;
+      route: InstallRoute;
+    }
+  | { state: "downloading"; version: string; downloaded: number; total: number | null }
+  | { state: "waiting"; version: string }
+  | { state: "installed"; version: string }
+  | { state: "failed"; message: string };
+
 export interface EngineError {
   kind: string;
   message: string;
@@ -304,6 +326,15 @@ export interface Engine {
   systemUsage(): Promise<SystemUsage>;
   /** Size and free space of the home folder's disk. */
   diskUsage(): Promise<DiskUsage>;
+  /** Asks the download page for a newer version. The only network request. */
+  checkForUpdate(): Promise<UpdateView>;
+  updateStatus(): Promise<UpdateView>;
+  /** Downloads, verifies, and installs the update the last check found. */
+  installUpdate(): Promise<UpdateView>;
+  /** Refused while a scan or cleanup runs. */
+  restartApp(): Promise<void>;
+  /** Opens the fixed download page in the browser. Sends nothing. */
+  openDownloadPage(): Promise<void>;
 }
 
 export const tauriEngine: Engine = {
@@ -329,4 +360,9 @@ export const tauriEngine: Engine = {
   appInfo: () => invoke("app_info"),
   systemUsage: () => invoke("system_usage"),
   diskUsage: () => invoke("disk_usage"),
+  checkForUpdate: () => invoke("check_for_update"),
+  updateStatus: () => invoke("update_status"),
+  installUpdate: () => invoke("install_update"),
+  restartApp: () => invoke("restart_app"),
+  openDownloadPage: () => invoke("open_download_page"),
 };
