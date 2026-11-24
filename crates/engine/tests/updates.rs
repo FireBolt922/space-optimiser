@@ -31,7 +31,7 @@ fn open_download_page_runs_the_os_command_with_only_the_fixed_address() {
         Some(expected) => {
             engine.open_download_page().unwrap();
             let calls = calls.lock().unwrap();
-            assert_eq!(calls.as_slice(), [expected.clone()]);
+            assert_eq!(calls.as_slice(), std::slice::from_ref(&expected));
             assert_eq!(expected.args, [OsString::from(DOWNLOAD_PAGE)]);
         }
         // Linux without xdg-open.
