@@ -472,10 +472,10 @@ pub(crate) fn entry_rule(
     if facts.locked {
         return Some(SkipReason::Locked);
     }
-    if let Some(min_age) = row.min_age() {
-        if !is_old(facts.times.0, facts.times.1, ctx.now(), min_age) {
-            return Some(SkipReason::Fresh);
-        }
+    if let Some(min_age) = row.min_age()
+        && !is_old(facts.times.0, facts.times.1, ctx.now(), min_age)
+    {
+        return Some(SkipReason::Fresh);
     }
     if facts.kind == Kind::Dir && ctx.is_protected_id(facts.id) {
         return Some(SkipReason::ProtectedFolder);
@@ -965,10 +965,10 @@ pub fn validate_temp_root(
     if canonical.parent().is_none() {
         return Err(RootRejection::FilesystemRoot);
     }
-    if let Some(area) = &ctx.required_temp_area {
-        if !canonical.starts_with(area) {
-            return Err(RootRejection::OutsideSystemTempArea);
-        }
+    if let Some(area) = &ctx.required_temp_area
+        && !canonical.starts_with(area)
+    {
+        return Err(RootRejection::OutsideSystemTempArea);
     }
     let id = measure::file_id(&canonical).map_err(|_| RootRejection::Unreadable)?;
     let same = |a: &Path| measure::file_id(a).is_ok_and(|other| other == id);

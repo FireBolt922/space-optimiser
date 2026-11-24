@@ -655,10 +655,10 @@ fn editors(ctx: &Context, platform: Platform, found: &mut Vec<CacheRoot>) {
 fn jetbrains_product(folder: &str) -> Option<(App, &str)> {
     for (app, prefixes) in JETBRAINS {
         for prefix in prefixes {
-            if let Some(version) = folder.strip_prefix(prefix) {
-                if is_version(version) {
-                    return Some((app, version));
-                }
+            if let Some(version) = folder.strip_prefix(prefix)
+                && is_version(version)
+            {
+                return Some((app, version));
             }
         }
     }
