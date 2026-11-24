@@ -12,6 +12,21 @@ export function Help({ info }: Props) {
         Help
       </h1>
 
+      <section className="card stack" aria-labelledby="help-overview">
+        <h2 id="help-overview" className="title">
+          Overview
+        </h2>
+        <p className="body-sm">
+          The Overview shows how much memory, swap, and CPU this computer is using, the apps using
+          the most memory and CPU, and how full the disk that holds your home folder is. The figures
+          update every 2 seconds while the Overview is open, and stop when you leave it.
+        </p>
+        <p className="body-sm ink-muted">
+          Space Optimiser only reads these figures. It never stops, pauses, or changes an app, and
+          the Overview removes nothing. To free space, use Clean up.
+        </p>
+      </section>
+
       <section className="card stack" aria-labelledby="help-modes">
         <h2 id="help-modes" className="title">
           Normal Scan and Deep Scan

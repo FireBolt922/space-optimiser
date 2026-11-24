@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCount, formatDuration, plural } from "./format";
+import { formatCount, formatDuration, formatMemory, plural } from "./format";
 
 describe("format", () => {
   it("groups thousands in counts", () => {
@@ -16,5 +16,14 @@ describe("format", () => {
     expect(formatDuration(90_900)).toBe("1 minute 30 seconds");
     expect(formatDuration(3_780_000)).toBe("1 hour 3 minutes");
     expect(formatDuration(7_200_000)).toBe("2 hours");
+  });
+});
+
+describe("formatMemory", () => {
+  it("uses binary units with GB labels, as Activity Monitor and Task Manager do", () => {
+    expect(formatMemory(16 * 1024 ** 3)).toBe("16.0 GB");
+    expect(formatMemory(512 * 1024 ** 2)).toBe("512 MB");
+    expect(formatMemory(1536 * 1024)).toBe("1.5 MB");
+    expect(formatMemory(900)).toBe("900 bytes");
   });
 });

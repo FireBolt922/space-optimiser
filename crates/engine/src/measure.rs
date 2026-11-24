@@ -48,7 +48,20 @@ pub fn allocated_size(path: &Path, metadata: &Metadata) -> Size {
 
 /// Bytes available to this user on the volume that holds `path`.
 pub fn free_space(path: &Path) -> io::Result<u64> {
-    sys::free_space(path)
+    Ok(sys::volume_space(path)?.free)
+}
+
+/// The size of a volume and the bytes on it available to this user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeSpace {
+    pub total: u64,
+    pub free: u64,
+}
+
+/// Size and free space of the volume that holds `path` (phase 14, the
+/// Overview's disk chart).
+pub fn volume_space(path: &Path) -> io::Result<VolumeSpace> {
+    sys::volume_space(path)
 }
 
 /// Whether `path` is on a network volume (NFS, SMB, AFP, a mapped drive).
@@ -177,7 +190,7 @@ pub(crate) fn facts_from_handle(
 
 #[cfg(unix)]
 mod sys {
-    use super::{EntryInfo, Facts, FileId, Kind, RawStat, Size};
+    use super::{EntryInfo, Facts, FileId, Kind, RawStat, Size, VolumeSpace};
     use std::fs::Metadata;
     use std::io;
     use std::os::unix::ffi::OsStrExt;
@@ -298,7 +311,7 @@ mod sys {
     }
 
     #[allow(clippy::unnecessary_cast)] // field widths differ between macOS and Linux
-    pub fn free_space(path: &Path) -> io::Result<u64> {
+    pub fn volume_space(path: &Path) -> io::Result<VolumeSpace> {
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // SAFETY: an all-zero statvfs is a valid out-parameter.
@@ -307,13 +320,17 @@ mod sys {
         if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+        let block = stat.f_frsize as u64;
+        Ok(VolumeSpace {
+            total: (stat.f_blocks as u64).saturating_mul(block),
+            free: (stat.f_bavail as u64).saturating_mul(block),
+        })
     }
 }
 
 #[cfg(windows)]
 mod sys {
-    use super::{EntryInfo, Facts, FileId, Kind, Size};
+    use super::{EntryInfo, Facts, FileId, Kind, Size, VolumeSpace};
     use crate::platform::wide;
     use std::fs::{Metadata, OpenOptions};
     use std::io;
@@ -533,22 +550,26 @@ mod sys {
         unsafe { GetDriveTypeW(name.as_ptr()) == DRIVE_REMOTE }
     }
 
-    pub fn free_space(path: &Path) -> io::Result<u64> {
+    pub fn volume_space(path: &Path) -> io::Result<VolumeSpace> {
         let name = wide(path);
         let mut available = 0u64;
-        // SAFETY: `name` is NUL-terminated; unused outputs may be null.
+        let mut total = 0u64;
+        // SAFETY: `name` is NUL-terminated; the unused output may be null.
         let ok = unsafe {
             GetDiskFreeSpaceExW(
                 name.as_ptr(),
                 &mut available,
-                std::ptr::null_mut(),
+                &mut total,
                 std::ptr::null_mut(),
             )
         };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(available)
+        Ok(VolumeSpace {
+            total,
+            free: available,
+        })
     }
 }
 

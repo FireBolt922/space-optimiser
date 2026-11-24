@@ -16,10 +16,10 @@ use crate::dedup;
 use crate::discover::{self, CancelToken, Progress, RootOutcome, Scan, ScanError};
 use crate::execute::{self, Measure, PlanEntry, RunEvent};
 use crate::model::{
-    Action, AppInfo, BuildPlanArgs, Candidate, ConfirmationToken, CurrentItem, ExecutePlanArgs,
-    ExecuteStart, ExportedReport, InterruptedRun, OUTPUT_LINES, Outcome, Plan, PlanId, PlanItem,
-    PlanRef, Platform, RECENT_ITEMS, Report, ReportItem, RevealArgs, RootView, RunCounts,
-    RunStatus, RunView, ScanId, ScanMode, ScanRef, ScanStatus, ScanView, SkippedView,
+    Action, AppInfo, BuildPlanArgs, Candidate, ConfirmationToken, CurrentItem, DiskUsage,
+    ExecutePlanArgs, ExecuteStart, ExportedReport, InterruptedRun, OUTPUT_LINES, Outcome, Plan,
+    PlanId, PlanItem, PlanRef, Platform, RECENT_ITEMS, Report, ReportItem, RevealArgs, RootView,
+    RunCounts, RunStatus, RunView, ScanId, ScanMode, ScanRef, ScanStatus, ScanView, SkippedView,
     StartScanArgs,
 };
 use crate::platform::RevealCommand;
@@ -540,6 +540,20 @@ impl Engine {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+        })
+    }
+
+    /// Size and free space of the volume that holds the home folder
+    /// (phase 14). Resolved again on every call, like a scan's context.
+    pub fn disk_usage(&self) -> Result<DiskUsage> {
+        let ctx = (self.0.config.context)().map_err(|e| EngineError::Context(e.to_string()))?;
+        let space = crate::measure::volume_space(ctx.home())
+            .map_err(|e| EngineError::DiskSpace(e.to_string()))?;
+        Ok(DiskUsage {
+            location_label: "The disk that holds your home folder",
+            total_bytes: space.total,
+            free_bytes: space.free,
+            used_bytes: space.total.saturating_sub(space.free),
         })
     }
 

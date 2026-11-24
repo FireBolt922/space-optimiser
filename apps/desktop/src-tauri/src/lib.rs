@@ -2,7 +2,9 @@
 //! the engine. No command accepts a path, and this crate holds no file logic
 //! (phase 3). Scans and runs happen on engine threads; the window polls
 //! `get_scan` and `get_run`. Commands that start a process or write a file
-//! (`reveal`, `export_report`) run off the main thread.
+//! (`reveal`, `export_report`) run off the main thread, as do the Overview's
+//! readings (`system_usage`, `disk_usage`), which read the process list and
+//! the disk.
 
 use std::path::PathBuf;
 
@@ -10,10 +12,11 @@ use space_optimiser_engine::{
     Config, Engine, EngineError,
     guard::{self, GuardError, InstanceLock},
     model::{
-        AppInfo, BuildPlanArgs, ConfirmationToken, ExecutePlanArgs, ExecuteStart, ExportedReport,
-        InterruptedRun, Plan, PlanRef, RevealArgs, RunView, ScanId, ScanRef, ScanView,
-        StartScanArgs,
+        AppInfo, BuildPlanArgs, ConfirmationToken, DiskUsage, ExecutePlanArgs, ExecuteStart,
+        ExportedReport, InterruptedRun, Plan, PlanRef, RevealArgs, RunView, ScanId, ScanRef,
+        ScanView, StartScanArgs, SystemUsage,
     },
+    monitor::Monitor,
     platform,
 };
 use tauri::{Manager, State};
@@ -80,6 +83,18 @@ fn export_report(engine: State<'_, Engine>, args: PlanRef) -> CommandResult<Expo
 #[tauri::command]
 fn app_info(engine: State<'_, Engine>) -> AppInfo {
     engine.app_info()
+}
+
+/// Memory, CPU, and the busiest process names (phase 14). Read only.
+#[tauri::command(async)]
+fn system_usage(monitor: State<'_, Monitor>) -> SystemUsage {
+    monitor.usage()
+}
+
+/// Size and free space of the home folder's disk (phase 14).
+#[tauri::command(async)]
+fn disk_usage(engine: State<'_, Engine>) -> CommandResult<DiskUsage> {
+    engine.disk_usage()
 }
 
 /// This computer's folders. Debug builds can point the engine at a copy of
@@ -181,6 +196,7 @@ pub fn run() {
                 Err(e) => return Err(e.into()),
             }
             app.manage(engine(dir.join("audit")));
+            app.manage(Monitor::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -195,7 +211,9 @@ pub fn run() {
             interrupted_run,
             reveal,
             export_report,
-            app_info
+            app_info,
+            system_usage,
+            disk_usage
         ])
         .run(tauri::generate_context!())
         .expect("error while running Space Optimiser");

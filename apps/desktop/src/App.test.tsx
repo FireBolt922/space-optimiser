@@ -9,6 +9,7 @@ import {
   ON_DEVICE_MODEL,
   PROJECT_CANDIDATES,
   REPORT,
+  SYSTEM_USAGE,
   XSS_NAME,
   androidScan,
   deepScan,
@@ -29,8 +30,15 @@ beforeEach(() => {
 
 const ABSOLUTE_PROMISE = "will not delete personal data";
 
+/** Renders the app and opens Clean up; the app opens on the Overview. */
+function renderCleanUp(engine: ReturnType<typeof fakeEngine>) {
+  const result = render(<App engine={engine} />);
+  fireEvent.click(nav("Clean up"));
+  return result;
+}
+
 async function toResults(engine = fakeEngine()) {
-  render(<App engine={engine} />);
+  renderCleanUp(engine);
   fireEvent.click(await screen.findByRole("button", { name: "Normal Scan" }));
   await screen.findByRole("heading", { name: "Results" });
   return engine;
@@ -55,7 +63,7 @@ async function toReview(engine = fakeEngine()) {
 
 describe("start", () => {
   it("leads with Deep Scan, then Normal Scan, then the two tools", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     const main = await screen.findByRole("main");
     const buttons = await within(main).findAllByRole("button");
     expect(buttons.map((b) => b.textContent)).toEqual([
@@ -71,7 +79,7 @@ describe("start", () => {
     expect(within(main).getByRole("heading", { name: "Tools" })).toBeTruthy();
   });
 
-  it("reports an interrupted run from an earlier session", async () => {
+  it("opens on Clean up to report an interrupted run from an earlier session", async () => {
     render(
       <App
         engine={fakeEngine({
@@ -92,7 +100,7 @@ describe("scanning", () => {
   // Phase 7 test 6.
   it("Cancel calls cancel_scan", async () => {
     const engine = fakeEngine({ scanRuns: true });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Normal Scan" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(engine.cancelScan).toHaveBeenCalledWith(7));
@@ -110,7 +118,7 @@ describe("scanning", () => {
       },
       scanStages: ["temp", "caches", "logs", "tools", "docker", "large_files"],
     });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     expect(await screen.findByText("Asking uv where its cache is.")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("Asking uv where its cache is.");
@@ -131,7 +139,7 @@ describe("scanning", () => {
   it("shows how long the scan has been running", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      render(<App engine={fakeEngine({ scanRuns: true })} />);
+      renderCleanUp(fakeEngine({ scanRuns: true }));
       fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
       expect(await screen.findByText(/^Running for /)).toBeTruthy();
       await act(async () => {
@@ -152,7 +160,7 @@ describe("results", () => {
         progress: { files_seen: 2_203_944, bytes_seen: 1, stage: "caches", detail: null },
       }),
     });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     await screen.findByRole("heading", { name: "Results" });
     expect(
@@ -371,7 +379,7 @@ describe("live cleaning progress", () => {
 
 describe("developer assets", () => {
   async function toDeep() {
-    render(<App engine={fakeEngine({ scan: deepScan() })} />);
+    renderCleanUp(fakeEngine({ scan: deepScan() }));
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     await screen.findByRole("heading", { name: "Results" });
   }
@@ -440,14 +448,14 @@ describe("developer assets", () => {
 // Phase 7 test 10.
 describe("deep scan", () => {
   async function toDeepResults(engine = fakeEngine({ scan: deepScan() })) {
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     await screen.findByRole("heading", { name: "Results" });
     return engine;
   }
 
   it("the start screen says what Deep Scan adds", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     expect(await screen.findByText(/package caches/)).toBeTruthy();
     expect(screen.queryByText(/later version/)).toBeNull();
   });
@@ -584,7 +592,7 @@ describe("accessibility", () => {
   });
 
   it("a tool row's checkbox names its upper bound", async () => {
-    render(<App engine={fakeEngine({ scan: deepScan() })} />);
+    renderCleanUp(fakeEngine({ scan: deepScan() }));
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     await screen.findByRole("heading", { name: "Results" });
     expect(
@@ -624,7 +632,7 @@ describe("show in folder", () => {
   });
 
   it("a row that cannot be revealed has no button", async () => {
-    render(<App engine={fakeEngine({ scan: deepScan() })} />);
+    renderCleanUp(fakeEngine({ scan: deepScan() }));
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
     await screen.findByRole("heading", { name: "Results" });
     expect(box("Docker build cache")).toBeTruthy();
@@ -701,14 +709,17 @@ describe("report export and explanation", () => {
 });
 
 describe("sidebar", () => {
-  it("has the four views and marks the current one", async () => {
+  it("has the five views, opens on the Overview, and marks the current one", async () => {
     render(<App engine={fakeEngine()} />);
     const main = screen.getByRole("navigation", { name: "Main" });
     expect(
       within(main)
         .getAllByRole("button")
         .map((b) => b.textContent),
-    ).toEqual(["Clean up", "Settings", "Help", "About"]);
+    ).toEqual(["Overview", "Clean up", "Settings", "Help", "About"]);
+    expect(nav("Overview").getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
+    fireEvent.click(nav("Clean up"));
     expect(nav("Clean up").getAttribute("aria-current")).toBe("page");
     fireEvent.click(nav("Help"));
     expect(nav("Help").getAttribute("aria-current")).toBe("page");
@@ -716,12 +727,12 @@ describe("sidebar", () => {
   });
 
   it("shows the version from the engine", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     expect(await screen.findByText("Version 0.1.0")).toBeTruthy();
   });
 
   it("a view change moves focus to that view's heading", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("Settings"));
     expect(document.activeElement).toBe(
       screen.getByRole("heading", { level: 1, name: "Settings" }),
@@ -734,7 +745,7 @@ describe("sidebar", () => {
 
   it("a scan keeps running while another view is open", async () => {
     const engine = fakeEngine();
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Normal Scan" }));
     fireEvent.click(nav("Help"));
     await waitFor(() => expect(engine.getScan).toHaveBeenCalled());
@@ -743,12 +754,140 @@ describe("sidebar", () => {
   });
 
   it("Settings, Help, and About have no primary button", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     for (const view of ["Settings", "Help", "About"]) {
       fireEvent.click(nav(view));
       await screen.findByRole("heading", { level: 1, name: view });
       expect(document.querySelectorAll(".button-primary").length).toBe(0);
     }
+  });
+});
+
+describe("overview", () => {
+  async function openOverview(engine = fakeEngine()) {
+    render(<App engine={engine} />);
+    await screen.findByText("312 GB");
+    await screen.findByRole("table", { name: "Most memory" });
+    return engine;
+  }
+
+  it("shows memory, swap, and CPU as text and as meters", async () => {
+    await openOverview();
+    const main = screen.getByRole("main");
+    expect(within(main).getByText("11.0 GB of 16.0 GB in use")).toBeTruthy();
+    expect(within(main).getByText("512 MB of 2.0 GB in use")).toBeTruthy();
+    expect(within(main).getByText("23% of 10 CPUs")).toBeTruthy();
+    const memory = within(main).getByRole("meter", { name: "Memory" });
+    expect(memory.getAttribute("aria-valuenow")).toBe("69");
+    expect(within(main).getByRole("meter", { name: "CPU" }).getAttribute("aria-valuenow")).toBe(
+      "23",
+    );
+    expect(within(main).getByRole("meter", { name: "Swap" })).toBeTruthy();
+  });
+
+  it("lists the processes using the most memory and the most CPU, by name only", async () => {
+    await openOverview();
+    const memory = screen.getByRole("table", { name: "Most memory" });
+    const rows = within(memory).getAllByRole("row").slice(1);
+    expect(rows.map((r) => within(r).getAllByRole("cell")[1].textContent)).toEqual([
+      "3.0 GB",
+      "2.0 GB",
+      "1.0 GB",
+    ]);
+    expect(within(rows[0]).getByText("× 14")).toBeTruthy();
+    const cpu = screen.getByRole("table", { name: "Most CPU" });
+    const cpuRows = within(cpu).getAllByRole("row").slice(1);
+    expect(cpuRows.map((r) => within(r).getAllByRole("cell")[1].textContent)).toEqual([
+      "12.5%",
+      "4.2%",
+    ]);
+  });
+
+  it("a process name is rendered as text, never as markup", async () => {
+    await openOverview();
+    expect(screen.getByText(XSS_NAME)).toBeTruthy();
+    expect(document.querySelector("img[src='x']")).toBeNull();
+  });
+
+  it("says CPU is still being measured on the first reading", async () => {
+    render(
+      <App
+        engine={fakeEngine({
+          systemUsage: { ...SYSTEM_USAGE, cpu_percent: null, top_cpu: [] },
+        })}
+      />,
+    );
+    expect(await screen.findAllByText("Measuring…")).not.toHaveLength(0);
+    expect(screen.queryByRole("meter", { name: "CPU" })).toBeNull();
+  });
+
+  it("draws the disk as a chart with its numbers in the name and as text", async () => {
+    await openOverview();
+    const chart = screen.getByRole("img", { name: /^Disk:/ });
+    expect(chart.getAttribute("aria-label")).toBe(
+      "Disk: 312 GB used, 182 GB free, of 494 GB. 63% used.",
+    );
+    expect(screen.getByText("312 GB")).toBeTruthy();
+    expect(screen.getByText("182 GB")).toBeTruthy();
+    expect(screen.getByText("494 GB")).toBeTruthy();
+  });
+
+  it("explains purgeable space on macOS only", async () => {
+    await openOverview(fakeEngine({ platform: "macos" }));
+    expect(await screen.findByText(/purgeable/)).toBeTruthy();
+    cleanup();
+    await openOverview(fakeEngine({ platform: "linux" }));
+    expect(screen.queryByText(/purgeable/)).toBeNull();
+  });
+
+  it("has one primary button, Clean up, which opens Clean up", async () => {
+    await openOverview();
+    const primary = document.querySelectorAll(".button-primary");
+    expect(primary).toHaveLength(1);
+    expect(primary[0].textContent).toBe("Clean up");
+    fireEvent.click(primary[0]);
+    expect(await screen.findByRole("heading", { name: "Free up space safely" })).toBeTruthy();
+    expect(nav("Clean up").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("shows an error for a reading that fails and keeps the other", async () => {
+    render(
+      <App
+        engine={fakeEngine({ systemError: { kind: "unsupported", message: "not supported" } })}
+      />,
+    );
+    expect(await screen.findByText("Could not read memory and CPU: Not supported")).toBeTruthy();
+    expect(await screen.findByText("312 GB")).toBeTruthy();
+  });
+
+  it("reads again every 2 seconds and stops when another view opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const engine = fakeEngine();
+      render(<App engine={engine} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(engine.systemUsage).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(engine.systemUsage).toHaveBeenCalledTimes(2);
+      expect(engine.diskUsage).toHaveBeenCalledTimes(2);
+      fireEvent.click(nav("Settings"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(engine.systemUsage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends no arguments to either reading", async () => {
+    const engine = await openOverview();
+    expect(engine.systemUsage.mock.calls[0]).toEqual([]);
+    expect(engine.diskUsage.mock.calls[0]).toEqual([]);
   });
 });
 
@@ -775,12 +914,12 @@ describe("theme", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("defaults to dark", () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
   it("the setting is applied and kept for the next launch", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("Settings"));
     const dark = screen.getByRole("radio", { name: /Dark/ }) as HTMLInputElement;
     expect(dark.checked).toBe(true);
@@ -789,13 +928,13 @@ describe("theme", () => {
     expect(localStorage.getItem("space-optimiser:theme")).toBe("light");
     cleanup();
     delete document.documentElement.dataset.theme;
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   it("Match system follows the system setting as it changes", async () => {
     const change = mockMatchMedia(true);
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("Settings"));
     fireEvent.click(screen.getByRole("radio", { name: "Match system" }));
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -814,7 +953,7 @@ describe("theme", () => {
       },
     };
     vi.stubGlobal("localStorage", broken);
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     expect(document.documentElement.dataset.theme).toBe("dark");
     fireEvent.click(nav("Settings"));
     fireEvent.click(screen.getByRole("radio", { name: "Light" }));
@@ -824,7 +963,7 @@ describe("theme", () => {
 
 describe("about and help", () => {
   it("About shows the version, the safety wording, no upload, and the audit log", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("About"));
     await screen.findByText("Version 0.1.0", { selector: "main *" });
     const text = screen.getByRole("main").textContent ?? "";
@@ -842,14 +981,14 @@ describe("about and help", () => {
   });
 
   it("About links to the local Help page", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("About"));
     fireEvent.click(await screen.findByRole("button", { name: "Open Help" }));
     expect(screen.getByRole("heading", { level: 1, name: "Help" })).toBeTruthy();
   });
 
   it("Help explains the essentials without the absolute promise", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(nav("Help"));
     const text = screen.getByRole("main").textContent ?? "";
     expect(text).toContain("Normal Scan");
@@ -1055,7 +1194,7 @@ describe("categories and long lists", () => {
 // The tools added in v0.5: Projects, Android, and the on-device AI model row.
 describe("projects tool", () => {
   async function toProjects(engine = fakeEngine({ scan: projectsScan() })) {
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Scan projects" }));
     await screen.findByRole("heading", { name: "Results" });
     return engine;
@@ -1080,7 +1219,7 @@ describe("projects tool", () => {
       },
       scanStages: ["projects"],
     });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Scan projects" }));
     expect(
       await screen.findByText("Looking for dependency and build folders in your projects."),
@@ -1174,7 +1313,7 @@ describe("projects tool", () => {
 
 describe("android tool", () => {
   async function toAndroid(engine = fakeEngine({ scan: androidScan() })) {
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Scan Android" }));
     await screen.findByRole("heading", { name: "Results" });
     return engine;
@@ -1186,7 +1325,7 @@ describe("android tool", () => {
       scanProgress: { files_seen: 12, bytes_seen: 1, stage: "android", detail: null },
       scanStages: ["android"],
     });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Scan Android" }));
     expect(await screen.findByText("Checking Android emulators and system images.")).toBeTruthy();
     expect(engine.startScan).toHaveBeenCalledWith("android");
@@ -1250,7 +1389,7 @@ describe("on-device AI model", () => {
     const engine = fakeEngine({
       scan: finishedScan({ candidates: [...CANDIDATES, ON_DEVICE_MODEL] }),
     });
-    render(<App engine={engine} />);
+    renderCleanUp(engine);
     fireEvent.click(await screen.findByRole("button", { name: "Normal Scan" }));
     await screen.findByRole("heading", { name: "Results" });
     return engine;
@@ -1292,7 +1431,7 @@ describe("on-device AI model", () => {
 
 describe("help for the tools", () => {
   it("explains Projects, Android, and the on-device model", async () => {
-    render(<App engine={fakeEngine()} />);
+    renderCleanUp(fakeEngine());
     fireEvent.click(await screen.findByRole("button", { name: "Help" }));
     const text = screen.getByRole("main").textContent ?? "";
     expect(text).toContain("Projects and Android");

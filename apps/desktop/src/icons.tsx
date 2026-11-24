@@ -22,6 +22,17 @@ function Icon({ children }: { children: ReactNode }) {
   );
 }
 
+/** A gauge: the Overview. */
+export function OverviewIcon() {
+  return (
+    <Icon>
+      <path d="M4.5 17a8 8 0 1 1 15 0" />
+      <path d="M12 13l3.5-4" />
+      <circle cx="12" cy="13.5" r="1" />
+    </Icon>
+  );
+}
+
 /** A drive with a sweep line: the clean-up view. */
 export function ScanIcon() {
   return (

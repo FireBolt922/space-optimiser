@@ -140,3 +140,35 @@ fn delete_calls_live_only_in_the_executor() {
         "the tool runner should start processes in one place"
     );
 }
+
+// Phase 14: the Overview reads processes and never signals one. Only the
+// monitor uses `sysinfo`, and it has no kill call.
+#[test]
+fn only_the_monitor_reads_system_figures_and_it_never_signals() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let monitor = fs::read_to_string(manifest.join("src/monitor.rs")).unwrap();
+    for needle in ["kill", "Signal", "set_priority", "wait("] {
+        assert!(!monitor.contains(needle), "monitor.rs uses {needle}");
+    }
+    let mut stack = vec![
+        manifest.join("src"),
+        manifest.join("../../apps/desktop/src-tauri/src"),
+    ];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && !path.ends_with("src/monitor.rs")
+            {
+                let text = fs::read_to_string(&path).unwrap();
+                assert!(
+                    !text.contains("sysinfo::"),
+                    "{} uses sysinfo; only src/monitor.rs may",
+                    path.display()
+                );
+            }
+        }
+    }
+}

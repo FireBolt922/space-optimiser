@@ -9,6 +9,13 @@ minor version can change behaviour.
 
 ### Added
 
+- **Overview**, a new first page that the app opens on. It shows memory,
+  swap, and CPU in use, the five apps using the most memory and the five
+  using the most CPU (by name; processes with the same name are added
+  together), and a chart of used and free space on the disk that holds your
+  home folder. The figures update every 2 seconds while the page is open.
+  It only reads: it never stops or changes an app and removes nothing. The
+  app still opens on Clean up when the last cleanup was interrupted.
 - **Projects**, a new tool on the Start screen. It finds the folders a
   project can recreate (`node_modules`, Rust `target`, Python virtual
   environments, and `.next`) and marks each project Old when nothing in it

@@ -718,3 +718,183 @@ details.card summary,
 .assets-table tbody th {
   font-weight: 600;
 }
+
+/* Overview (phase 14): performance and disk side by side when there is room. */
+.screen-wide {
+  max-width: var(--container);
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.overview-card {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.overview-action {
+  align-self: flex-start;
+}
+
+.gauges {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.gauge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.gauge-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.meter {
+  display: block;
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.meter-track {
+  fill: var(--surface-sunken);
+}
+
+.meter-fill {
+  fill: var(--primary);
+}
+
+.meter-high .meter-fill {
+  fill: var(--warning);
+}
+
+.process-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.process-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.process-table th:last-child,
+.process-table td:last-child {
+  width: 6.5em;
+  padding-right: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.disk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.donut {
+  width: 168px;
+  height: 168px;
+  flex: none;
+}
+
+.donut circle {
+  fill: none;
+  stroke-width: 6;
+}
+
+.donut-free {
+  stroke: var(--surface-sunken);
+}
+
+.donut-used {
+  stroke: var(--primary);
+}
+
+.donut-high .donut-used {
+  stroke: var(--warning);
+}
+
+.donut text {
+  fill: var(--ink);
+  text-anchor: middle;
+  font-family: var(--font-sans);
+}
+
+.donut-value {
+  font-size: 7px;
+  font-weight: 700;
+}
+
+.donut-caption {
+  font-size: 3.5px;
+}
+
+/* After `.donut text`, which it overrides. */
+.donut .donut-caption {
+  fill: var(--ink-muted);
+}
+
+.disk-legend {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 160px;
+}
+
+.disk-legend div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.disk-legend dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+}
+
+.disk-legend dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
+}
+
+.swatch-used {
+  background: var(--primary);
+}
+
+.swatch-free {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+}

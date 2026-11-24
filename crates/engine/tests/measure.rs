@@ -69,3 +69,12 @@ fn free_space_is_reported_for_the_volume_of_a_path() {
     let free = measure::free_space(&home.path("tmp")).unwrap();
     assert!(free > 0);
 }
+
+// Phase 14: the Overview's disk chart needs the volume's size too.
+#[test]
+fn volume_space_reports_total_and_free_for_the_volume_of_a_path() {
+    let home = common::basic_home();
+    let space = measure::volume_space(&home.path("tmp")).unwrap();
+    assert!(space.free > 0);
+    assert!(space.total >= space.free);
+}

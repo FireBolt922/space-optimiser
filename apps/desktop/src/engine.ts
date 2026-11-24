@@ -227,6 +227,40 @@ export interface ExportedReport {
   file_name: string;
 }
 
+/** Bytes in use of a total: memory or swap. */
+export interface MemoryUsage {
+  total_bytes: number;
+  used_bytes: number;
+}
+
+/** One process name; processes with the same name are added together. */
+export interface ProcessUsage {
+  name: string;
+  memory_bytes: number;
+  /** Share of the whole machine, 0–100. Null until there are two samples. */
+  cpu_percent: number | null;
+  count: number;
+}
+
+/** The Overview's memory, CPU, and busiest processes. Read only. */
+export interface SystemUsage {
+  memory: MemoryUsage;
+  swap: MemoryUsage;
+  /** Share of all logical CPUs, 0–100. Null on the first reading. */
+  cpu_percent: number | null;
+  logical_cpus: number;
+  top_memory: ProcessUsage[];
+  top_cpu: ProcessUsage[];
+}
+
+/** The disk that holds the home folder. */
+export interface DiskUsage {
+  location_label: string;
+  total_bytes: number;
+  free_bytes: number;
+  used_bytes: number;
+}
+
 export interface EngineError {
   kind: string;
   message: string;
@@ -266,6 +300,10 @@ export interface Engine {
   /** Saves the finished run's report as a local text file. Nothing is uploaded. */
   exportReport(planId: number): Promise<ExportedReport>;
   appInfo(): Promise<AppInfo>;
+  /** Memory, CPU, and the busiest process names. Takes nothing; reads only. */
+  systemUsage(): Promise<SystemUsage>;
+  /** Size and free space of the home folder's disk. */
+  diskUsage(): Promise<DiskUsage>;
 }
 
 export const tauriEngine: Engine = {
@@ -289,4 +327,6 @@ export const tauriEngine: Engine = {
   reveal: (candidateId) => invoke("reveal", { args: { candidate_id: candidateId } }),
   exportReport: (planId) => invoke("export_report", { args: { plan_id: planId } }),
   appInfo: () => invoke("app_info"),
+  systemUsage: () => invoke("system_usage"),
+  diskUsage: () => invoke("disk_usage"),
 };

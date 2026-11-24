@@ -616,3 +616,50 @@ pub struct InterruptedRun {
     pub items_planned: usize,
     pub actions: Vec<InterruptedAction>,
 }
+
+/// Bytes in use of a total: memory or swap (phase 14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct MemoryUsage {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+}
+
+/// One process name on the Overview. Processes with the same name are
+/// summed. Names and numbers only: no path, command line, user, or id.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessUsage {
+    pub name: String,
+    pub memory_bytes: u64,
+    /// Share of the whole machine (all logical CPUs), 0–100. None until
+    /// there are two samples.
+    pub cpu_percent: Option<f32>,
+    /// How many processes have this name.
+    pub count: u32,
+}
+
+/// Memory, CPU, and the busiest processes, for the Overview (phase 14).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SystemUsage {
+    /// In use is total minus what the system reports as available.
+    pub memory: MemoryUsage,
+    pub swap: MemoryUsage,
+    /// Share of all logical CPUs in use, 0–100. None on the first reading.
+    pub cpu_percent: Option<f32>,
+    pub logical_cpus: usize,
+    /// The names using the most memory, largest first.
+    pub top_memory: Vec<ProcessUsage>,
+    /// The names using the most CPU, largest first. Empty until there are
+    /// two samples.
+    pub top_cpu: Vec<ProcessUsage>,
+}
+
+/// The volume that holds the home folder, for the Overview's disk chart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiskUsage {
+    pub location_label: &'static str,
+    pub total_bytes: u64,
+    /// Available to this user, as the system reports it.
+    pub free_bytes: u64,
+    /// Total minus free.
+    pub used_bytes: u64,
+}

@@ -30,13 +30,14 @@ The only cleanups measured so far were on one Apple Silicon Mac. Windows and Ubu
 
 ## Workflow
 
-1. Choose Normal Scan or Deep Scan, or one of the tools: Projects or Android.
-2. Scan. The app does not delete anything while scanning.
-3. Read each result: what it is, where it is, how much space it might recover, and what can go wrong.
-4. Select items, or use "Select safe items" for the low-risk items that allow it.
-5. Review the exact actions.
-6. Confirm. The engine checks every path again, then performs only the allowed operations. Deletions cannot be undone; files do not go to the Trash.
-7. See what was removed, what was skipped, what failed, and how much free space changed.
+1. Start on the Overview: memory, CPU, the busiest apps, and how full the disk is. It only reads.
+2. Choose Normal Scan or Deep Scan, or one of the tools: Projects or Android.
+3. Scan. The app does not delete anything while scanning.
+4. Read each result: what it is, where it is, how much space it might recover, and what can go wrong.
+5. Select items, or use "Select safe items" for the low-risk items that allow it.
+6. Review the exact actions.
+7. Confirm. The engine checks every path again, then performs only the allowed operations. Deletions cannot be undone; files do not go to the Trash.
+8. See what was removed, what was skipped, what failed, and how much free space changed.
 
 ## Safety
 
