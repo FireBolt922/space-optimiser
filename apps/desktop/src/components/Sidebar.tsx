@@ -15,10 +15,12 @@ const ITEMS: { view: View; label: string; Icon: ComponentType }[] = [
 interface Props {
   view: View;
   version: string | null;
+  /** A newer version the start-up check found, if any. */
+  updateVersion?: string | null;
   onNavigate: (view: View) => void;
 }
 
-export function Sidebar({ view, version, onNavigate }: Props) {
+export function Sidebar({ view, version, updateVersion, onNavigate }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -42,6 +44,15 @@ export function Sidebar({ view, version, onNavigate }: Props) {
           ))}
         </ul>
       </nav>
+      {updateVersion && (
+        <button
+          type="button"
+          className="button button-sm sidebar-update"
+          onClick={() => onNavigate("settings")}
+        >
+          Version {updateVersion} is available
+        </button>
+      )}
       {version && <p className="caption ink-muted sidebar-version">Version {version}</p>}
     </aside>
   );

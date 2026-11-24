@@ -135,6 +135,24 @@ export function Help({ info }: Props) {
         </p>
       </section>
 
+      <section className="card stack" aria-labelledby="help-updates">
+        <h2 id="help-updates" className="title">
+          Updates
+        </h2>
+        <p className="body-sm">
+          Open Settings and choose Check for updates. Space Optimiser asks its download page on
+          GitHub for the newest version and sends no file names or paths. It checks only when you
+          ask, or each time it starts if you turn that on in Settings.
+        </p>
+        <p className="body-sm">
+          On a Mac and on Windows, Download and install fetches the new version, checks it against
+          the project&apos;s signing key, and installs it. Nothing is installed while a scan or
+          cleanup is running. On Ubuntu, and on a Mac where your account cannot change the
+          app&apos;s folder, installing needs an administrator password, which Space Optimiser never
+          asks for, so it opens the download page instead.
+        </p>
+      </section>
+
       <section className="card stack" aria-labelledby="help-admin">
         <h2 id="help-admin" className="title">
           Administrator access

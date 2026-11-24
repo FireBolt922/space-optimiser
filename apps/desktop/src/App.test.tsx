@@ -10,6 +10,7 @@ import {
   PROJECT_CANDIDATES,
   REPORT,
   SYSTEM_USAGE,
+  UPDATE_AVAILABLE,
   XSS_NAME,
   androidScan,
   deepScan,
@@ -891,6 +892,147 @@ describe("overview", () => {
   });
 });
 
+describe("updates", () => {
+  async function openSettings(engine = fakeEngine()) {
+    render(<App engine={engine} />);
+    fireEvent.click(nav("Settings"));
+    await screen.findByRole("heading", { level: 2, name: "Updates" });
+    return engine;
+  }
+  const checkButton = () => screen.getByRole("button", { name: "Check for updates" });
+
+  it("Settings shows the version and contacts nothing until asked", async () => {
+    const engine = await openSettings();
+    expect(screen.getByText("You have version 0.1.0.")).toBeTruthy();
+    expect(engine.checkForUpdate).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("checkbox", { name: /when Space Optimiser starts/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+  });
+
+  it("says when the app is up to date", async () => {
+    const engine = await openSettings();
+    fireEvent.click(checkButton());
+    expect(await screen.findByText("Space Optimiser is up to date (version 0.1.0).")).toBeTruthy();
+    expect(engine.checkForUpdate).toHaveBeenCalledTimes(1);
+    expect(engine.checkForUpdate.mock.calls[0]).toEqual([]);
+  });
+
+  it("shows a new version's notes as text and installs it only when asked", async () => {
+    const engine = await openSettings(
+      fakeEngine({
+        updateCheck: UPDATE_AVAILABLE,
+        updateProgress: [
+          { state: "downloading", version: "0.6.0", downloaded: 3_000_000, total: 12_000_000 },
+          { state: "installed", version: "0.6.0" },
+        ],
+      }),
+    );
+    fireEvent.click(checkButton());
+    expect(await screen.findByText("Version 0.6.0 is available. You have 0.1.0.")).toBeTruthy();
+    expect(screen.getByText(/Overview\*\*, a new first page/)).toBeTruthy();
+    expect(document.querySelector("img[src='x']")).toBeNull();
+    expect(engine.installUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download and install" }));
+    expect(await screen.findByText("Downloading version 0.6.0: 3.0 MB of 12.0 MB")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Download progress" })).toBeTruthy();
+    expect(
+      await screen.findByText("Version 0.6.0 is installed. Restart Space Optimiser to use it."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restart now" }));
+    await waitFor(() => expect(engine.restartApp).toHaveBeenCalledTimes(1));
+  });
+
+  it("says why it waits after the download", async () => {
+    await openSettings(
+      fakeEngine({
+        updateCheck: UPDATE_AVAILABLE,
+        updateProgress: [{ state: "waiting", version: "0.6.0" }],
+      }),
+    );
+    fireEvent.click(checkButton());
+    fireEvent.click(await screen.findByRole("button", { name: "Download and install" }));
+    expect(
+      await screen.findByText(
+        "Version 0.6.0 is downloaded and verified. It installs when the scan or cleanup finishes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("an install refused during a cleanup says so", async () => {
+    await openSettings(
+      fakeEngine({
+        updateCheck: UPDATE_AVAILABLE,
+        installError: {
+          kind: "busy",
+          message: "a scan or cleanup is running. Try again when it has finished.",
+        },
+      }),
+    );
+    fireEvent.click(checkButton());
+    fireEvent.click(await screen.findByRole("button", { name: "Download and install" }));
+    expect(
+      await screen.findByText("A scan or cleanup is running. Try again when it has finished."),
+    ).toBeTruthy();
+  });
+
+  it("on Linux it links to the download page instead of installing", async () => {
+    const engine = await openSettings(
+      fakeEngine({ updateCheck: { ...UPDATE_AVAILABLE, route: "linux_package" } }),
+    );
+    fireEvent.click(checkButton());
+    expect(await screen.findByText(/needs an administrator password/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Download and install" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open download page" }));
+    await waitFor(() => expect(engine.openDownloadPage).toHaveBeenCalledTimes(1));
+    expect(engine.openDownloadPage.mock.calls[0]).toEqual([]);
+  });
+
+  it("on a Mac whose app folder is locked it links to the download page", async () => {
+    await openSettings(
+      fakeEngine({ updateCheck: { ...UPDATE_AVAILABLE, route: "app_folder_locked" } }),
+    );
+    fireEvent.click(checkButton());
+    expect(await screen.findByText(/cannot change the folder Space Optimiser is in/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open download page" })).toBeTruthy();
+  });
+
+  it("a failed check shows the reason", async () => {
+    await openSettings(
+      fakeEngine({
+        updateCheck: { state: "failed", message: "could not check for updates: timed out" },
+      }),
+    );
+    fireEvent.click(checkButton());
+    expect(await screen.findByText("Could not check for updates: timed out")).toBeTruthy();
+  });
+
+  it("does not check at start unless that setting is on", async () => {
+    const engine = fakeEngine({ updateCheck: UPDATE_AVAILABLE });
+    render(<App engine={engine} />);
+    await screen.findByRole("heading", { level: 1, name: "Overview" });
+    expect(engine.checkForUpdate).not.toHaveBeenCalled();
+  });
+
+  it("the start-up check is saved, runs once, and the sidebar points to the update", async () => {
+    await openSettings();
+    fireEvent.click(screen.getByRole("checkbox", { name: /when Space Optimiser starts/ }));
+    expect(localStorage.getItem("space-optimiser:check-updates-at-start")).toBe("on");
+    cleanup();
+
+    const engine = fakeEngine({ updateCheck: UPDATE_AVAILABLE });
+    render(<App engine={engine} />);
+    const notice = await screen.findByRole("button", { name: "Version 0.6.0 is available" });
+    expect(engine.checkForUpdate).toHaveBeenCalledTimes(1);
+    fireEvent.click(notice);
+    expect(await screen.findByText("Version 0.6.0 is available. You have 0.1.0.")).toBeTruthy();
+    expect(nav("Settings").getAttribute("aria-current")).toBe("page");
+    expect(engine.checkForUpdate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("theme", () => {
   function mockMatchMedia(light: boolean) {
     const listeners: ((e: { matches: boolean }) => void)[] = [];
@@ -973,7 +1115,7 @@ describe("about and help", () => {
     expect(text).toContain("This app does not upload a list of your files.");
     expect(text).toContain("/Users/test/Library/Application Support/Space Optimiser/audit.jsonl");
     expect(text).toContain("You can delete this file yourself. Space Optimiser does not clean it.");
-    expect(text).toContain("This version does not update itself.");
+    expect(text).toContain("Check for updates in Settings.");
     expect(text).toContain("SIL Open Font License");
     expect(text).toContain("MIT License");
     expect(text).toContain("Permission is hereby granted, free of charge");

@@ -8,7 +8,8 @@ interface Props {
   onHelp: () => void;
 }
 
-// Everything here is local: no external links and no network fetch.
+// Everything here is local: no external links and no network fetch. Update
+// checks live in Settings.
 export function About({ info, onHelp }: Props) {
   return (
     <section className="screen" aria-labelledby="about-title">
@@ -20,7 +21,10 @@ export function About({ info, onHelp }: Props) {
         <p className="body-sm">Version {info?.version ?? "unknown"}</p>
         <p className="body-sm ink-muted">{SAFETY_WORDING}</p>
         <p className="body-sm">{NO_UPLOAD}</p>
-        <p className="body-sm">This version does not update itself.</p>
+        <p className="body-sm">
+          Check for updates in Settings. Space Optimiser checks only when you ask, or when it starts
+          if you turn that on.
+        </p>
       </div>
 
       <div className="card stack">

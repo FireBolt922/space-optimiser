@@ -500,9 +500,15 @@ impl Engine {
             return Err(EngineError::CandidateGone);
         }
         let command = crate::platform::reveal_command(&path).ok_or(EngineError::RevealFailed)?;
+        self.launch(&command)
+    }
+
+    /// Starts the file manager or browser through the tool runner (or the
+    /// test hook) and waits a few seconds for it.
+    fn launch(&self, command: &RevealCommand) -> Result<()> {
         let shown = match &self.0.config.reveal {
-            Some(hook) => hook(&command).is_ok(),
-            None => match crate::tool::reveal(&command) {
+            Some(hook) => hook(command).is_ok(),
+            None => match crate::tool::reveal(command) {
                 // Explorer exits with 1 even when it opened the window.
                 Ok(Some(status)) => status.success() || cfg!(windows),
                 Ok(None) => true,
@@ -514,6 +520,25 @@ impl Engine {
         } else {
             Err(EngineError::RevealFailed)
         }
+    }
+
+    /// Opens the fixed download page in the default browser (phase 15).
+    /// Started like "Show in folder": a fixed program, one fixed argument.
+    pub fn open_download_page(&self) -> Result<()> {
+        let command = crate::platform::open_url_command(crate::platform::DOWNLOAD_PAGE)
+            .ok_or(EngineError::RevealFailed)?;
+        self.launch(&command)
+    }
+
+    /// `Some(Busy)` while a scan or a cleanup is running. An update must
+    /// not quit the app then (phase 15).
+    pub fn busy(&self) -> Option<EngineError> {
+        let state = self.state();
+        let scanning = state
+            .scan
+            .as_ref()
+            .is_some_and(|s| s.view.status == ScanStatus::Running);
+        (scanning || state.running.is_some()).then_some(EngineError::Busy)
     }
 
     /// Saves a finished run's report as a text file and says where.

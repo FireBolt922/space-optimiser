@@ -28,6 +28,7 @@ import { About } from "./screens/About";
 import { Overview } from "./screens/Overview";
 import { Sidebar, type View } from "./components/Sidebar";
 import { useTheme } from "./theme";
+import { loadAutoCheck, saveAutoCheck } from "./updatePrefs";
 
 const POLL_MS = 200;
 
@@ -70,6 +71,8 @@ export default function App({ engine }: { engine: Engine }) {
   const [view, setView] = useState<View>("overview");
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [theme, setTheme] = useTheme();
+  const [autoCheck, setAutoCheck] = useState(loadAutoCheck);
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const main = useRef<HTMLElement>(null);
   const shownView = useRef(view);
   // The last scan's mode and times, for the clock, the Results header, and
@@ -90,6 +93,20 @@ export default function App({ engine }: { engine: Engine }) {
       () => setInterrupted(null),
     );
     engine.appInfo().then(setInfo, () => setInfo(null));
+  }, [engine]);
+
+  // The start-up update check runs once, and only when the person turned it
+  // on in Settings. A failure stays quiet; Settings shows it on a manual check.
+  const checkedAtStart = useRef(false);
+  useEffect(() => {
+    if (checkedAtStart.current || !loadAutoCheck()) return;
+    checkedAtStart.current = true;
+    engine.checkForUpdate().then(
+      (update) => {
+        if (update.state === "available") setUpdateVersion(update.version);
+      },
+      () => undefined,
+    );
   }, [engine]);
 
   // A view change moves focus to that view's heading.
@@ -321,7 +338,12 @@ export default function App({ engine }: { engine: Engine }) {
 
   return (
     <div className="app">
-      <Sidebar view={view} version={info?.version ?? null} onNavigate={setView} />
+      <Sidebar
+        view={view}
+        version={info?.version ?? null}
+        updateVersion={updateVersion}
+        onNavigate={setView}
+      />
       <main className="app-main" ref={main}>
         {view === "overview" && (
           <Overview
@@ -331,7 +353,21 @@ export default function App({ engine }: { engine: Engine }) {
           />
         )}
         {view === "cleanup" && cleanupScreen}
-        {view === "settings" && <Settings theme={theme} onTheme={setTheme} />}
+        {view === "settings" && (
+          <Settings
+            theme={theme}
+            onTheme={setTheme}
+            updates={{
+              engine,
+              version: info?.version ?? null,
+              autoCheck,
+              onAutoCheck: (on) => {
+                saveAutoCheck(on);
+                setAutoCheck(on);
+              },
+            }}
+          />
+        )}
         {view === "help" && <Help info={info} />}
         {view === "about" && <About info={info} onHelp={() => setView("help")} />}
       </main>

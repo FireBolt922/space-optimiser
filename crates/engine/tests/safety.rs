@@ -403,11 +403,23 @@ fn safety_7_no_network_clients_and_no_granted_capabilities() {
     assert!(sysinfo.contains("default-features = false"), "{sysinfo}");
     assert!(sysinfo.contains(r#"features = ["system"]"#), "{sysinfo}");
 
-    // The shell installs no plugin and grants no permission.
+    // The shell installs one plugin, the signed updater (phase 15), and
+    // uses it from Rust only. It grants the webview no permission.
     let shell_toml = fs::read_to_string(desktop.join("src-tauri/Cargo.toml")).unwrap();
-    assert!(
-        !shell_toml.contains("tauri-plugin"),
+    let plugins: Vec<&str> = shell_toml
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("tauri-plugin"))
+        .collect();
+    assert_eq!(
+        plugins,
+        ["tauri-plugin-updater.workspace = true"],
         "a Tauri plugin was added"
+    );
+    let ui_package = fs::read_to_string(desktop.join("package.json")).unwrap();
+    assert!(
+        !ui_package.contains("@tauri-apps/plugin-"),
+        "the webview must not import a plugin's JavaScript API"
     );
     let capability =
         fs::read_to_string(desktop.join("src-tauri/capabilities/default.toml")).unwrap();

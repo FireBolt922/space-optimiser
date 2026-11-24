@@ -898,3 +898,27 @@ details.card summary,
   background: var(--surface-sunken);
   border: 1px solid var(--border-strong);
 }
+
+/* Updates (phase 15). Release notes keep their line breaks. */
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.release-notes {
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-update {
+  margin: var(--space-2) var(--space-4) 0;
+  white-space: normal;
+  text-align: left;
+}

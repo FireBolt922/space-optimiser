@@ -1,7 +1,14 @@
 // Tests for the download page renderer. Run with `node --test site/`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyAsset, formatSize, prepareReleases, renderPage } from "./render.mjs";
+import {
+  checkManifest,
+  classifyAsset,
+  formatSize,
+  prepareReleases,
+  renderPage,
+  updaterSource,
+} from "./render.mjs";
 
 const REPO = "FireBolt922/space-optimiser";
 
@@ -143,4 +150,51 @@ test("renderPage links only to GitHub and the page's own files", () => {
       `unexpected link ${url}`,
     );
   }
+});
+
+// Phase 15: the page serves the newest release's updater manifest.
+test("updaterSource is the newest published release with a latest.json", () => {
+  const withManifest = (version, date) =>
+    release(version, {
+      published_at: date,
+      assets: [asset("latest.json"), ...release(version).assets],
+    });
+  const list = prepareReleases([
+    withManifest("0.5.0", "2026-11-01T00:00:00Z"),
+    release("0.6.0", { published_at: "2026-11-20T00:00:00Z" }),
+    withManifest("0.7.0", "2026-11-22T00:00:00Z"),
+    release("0.8.0", { draft: true, published_at: null, assets: [asset("latest.json")] }),
+  ]);
+  assert.deepEqual(updaterSource(list), {
+    version: "0.7.0",
+    url: `https://github.com/${REPO}/releases/download/vX/latest.json`,
+  });
+  assert.equal(updaterSource(prepareReleases([release("0.4.0")])), null);
+});
+
+test("checkManifest accepts only a signed manifest for that version from this repo", () => {
+  const good = {
+    version: "0.7.0",
+    platforms: {
+      "darwin-aarch64": {
+        url: `https://github.com/${REPO}/releases/download/v0.7.0/a.app.tar.gz`,
+        signature: "abc",
+      },
+    },
+  };
+  assert.equal(checkManifest(good, "0.7.0", REPO), good);
+  assert.throws(() => checkManifest(good, "0.6.0", REPO), /version/);
+  assert.throws(() => checkManifest({ ...good, platforms: {} }, "0.7.0", REPO), /platform/);
+  const elsewhere = structuredClone(good);
+  elsewhere.platforms["darwin-aarch64"].url = "https://example.com/a.app.tar.gz";
+  assert.throws(() => checkManifest(elsewhere, "0.7.0", REPO), /url/);
+  const unsigned = structuredClone(good);
+  unsigned.platforms["darwin-aarch64"].signature = "";
+  assert.throws(() => checkManifest(unsigned, "0.7.0", REPO), /signature/);
+});
+
+test("the updater manifest is not offered as a download", () => {
+  assert.equal(classifyAsset("latest.json"), null);
+  assert.equal(classifyAsset("Space.Optimiser.app.tar.gz"), null);
+  assert.equal(classifyAsset("Space.Optimiser_0.7.0_amd64.deb.sig"), null);
 });

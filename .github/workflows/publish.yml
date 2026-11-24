@@ -127,10 +127,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # One .dmg that runs on Apple silicon and Intel Macs.
+          # One .dmg that runs on Apple silicon and Intel Macs. The .app
+          # bundle is built too: the updater ships it as .app.tar.gz.
           - name: macOS
             os: macos-latest
-            args: --target universal-apple-darwin --bundles dmg
+            args: --target universal-apple-darwin --bundles app,dmg
             rust_targets: aarch64-apple-darwin x86_64-apple-darwin
           - name: Ubuntu
             os: ubuntu-22.04
@@ -170,21 +171,52 @@ jobs:
       # macOS: an ad-hoc signature ("-") only. Without one, Apple silicon
       # Macs report a downloaded app as damaged instead of offering
       # "Open Anyway". It is not a Developer ID signature.
+      # Updater files (phase 15) are signed with the updater key, which is
+      # separate from code signing. Only this workflow has the key, so only
+      # it turns createUpdaterArtifacts on.
       - name: Build installers
         working-directory: apps/desktop
         shell: bash
         env:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-        run: npx tauri build --ci ${{ matrix.args }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set; updates cannot be signed."
+            exit 1
+          fi
+          npx tauri build --ci --config '{"bundle":{"createUpdaterArtifacts":true}}' ${{ matrix.args }}
 
-      # Only the installers. Never audit logs, fixture homes, or test output.
+      # The app checks for updates on Linux too, and the manifest needs a
+      # signed entry for it, so the .deb gets a signature if the bundler
+      # did not make one. The app never installs it (that needs sudo).
+      - name: Sign the .deb for the update check (Ubuntu)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          for deb in ../../target/release/bundle/deb/*.deb; do
+            [ -f "$deb.sig" ] || npx tauri signer sign "$deb"
+          done
+
+      # Only the installers, the macOS update archive, and their update
+      # signatures. Never audit logs, fixture homes, or test output.
+      # GitHub turns spaces in asset names into dots on upload; doing it
+      # here keeps the names in latest.json the same as the release's.
       - name: Collect installers
         shell: bash
         run: |
           mkdir dist-release
           find target -path '*/release/bundle/*' -type f \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \) \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \
+               -o -name '*.app.tar.gz' -o -name '*.sig' \) \
             -exec cp {} dist-release/ \;
+          for f in dist-release/*\ *; do
+            if [ -e "$f" ]; then mv "$f" "dist-release/$(basename "$f" | tr ' ' '.')"; fi
+          done
           ls -l dist-release
           test -n "$(ls dist-release)"
 
@@ -210,6 +242,16 @@ jobs:
           pattern: installers-*
           path: dist-release
           merge-multiple: true
+
+      # The updater manifest (phase 15). Fails if a system's update file or
+      # its signature is missing. The download page serves the newest one.
+      - name: Updater manifest
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          scripts/changelog-section.sh "$VERSION" > updater-notes.md
+          node scripts/updater-manifest.mjs --version "$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --dir dist-release --notes updater-notes.md --out dist-release/latest.json
 
       - name: Checksums
         working-directory: dist-release

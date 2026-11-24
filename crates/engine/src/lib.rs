@@ -88,6 +88,8 @@ pub enum EngineError {
     RunningElevated,
     #[error("could not read the size of the disk: {0}")]
     DiskSpace(String),
+    #[error("a scan or cleanup is running. Try again when it has finished.")]
+    Busy,
 }
 
 impl EngineError {
@@ -111,6 +113,7 @@ impl EngineError {
             EngineError::ExportFailed(_) => "export_failed",
             EngineError::RunningElevated => "running_elevated",
             EngineError::DiskSpace(_) => "disk_space",
+            EngineError::Busy => "busy",
         }
     }
 }

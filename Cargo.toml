@@ -25,3 +25,8 @@ trybuild = "=1.0.125"
 sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }
 tauri = { version = "=2.11.6", features = [] }
 tauri-build = { version = "=2.6.3", features = [] }
+# Signed in-app updates (phase 15). Used from Rust only; the webview gets no
+# updater permission. No `zip`: it reads only the legacy v1 .zip update
+# files (and pulled in a `zip` crate with open advisories); v2 updates are
+# the installer itself on Windows and a .tar.gz on macOS.
+tauri-plugin-updater = { version = "=2.12.0", default-features = false, features = ["rustls-tls", "system-proxy"] }

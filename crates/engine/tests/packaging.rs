@@ -1,6 +1,7 @@
 //! Phase 12: the bundle configuration keeps the release rules. One version
 //! source, hardened runtime without entitlements, the WebKitGTK package the
 //! `.deb` needs, the Inter licence shipped, and a CSP with no remote source.
+//! Phase 15 adds the signed updater's configuration.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -126,10 +127,77 @@ fn bundles_are_built_for_each_os() {
     for target in ["app", "dmg", "deb", "nsis", "msi"] {
         assert!(targets.contains(&target), "{target} is not bundled");
     }
-    // No updater: the first release does not update itself.
+    // Updater files are made only by the publish workflow, which holds the
+    // signing key, so a local `tauri build` needs no key (phase 15).
     assert!(!targets.contains(&"updater"));
     assert_ne!(bundle["createUpdaterArtifacts"], true);
-    assert!(tauri_conf()["plugins"].get("updater").is_none());
+}
+
+/// Standard base64, for reading the updater's public key.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bits = 0u32;
+    let mut count = 0;
+    let mut out = Vec::new();
+    for byte in text.trim().bytes().take_while(|&b| b != b'=') {
+        bits = (bits << 6) | ALPHABET.iter().position(|&a| a == byte)? as u32;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+        }
+    }
+    Some(out)
+}
+
+// Phase 15: updates are signed and come from the download page over HTTPS.
+#[test]
+fn the_updater_checks_signed_updates_from_the_download_page() {
+    let updater = &tauri_conf()["plugins"]["updater"];
+    let endpoints: Vec<&str> = updater["endpoints"]
+        .as_array()
+        .expect("updater endpoints are listed")
+        .iter()
+        .map(|e| e.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        endpoints,
+        ["https://firebolt922.github.io/space-optimiser/latest.json"]
+    );
+    assert_eq!(updater["windows"]["installMode"], "passive");
+    assert!(updater.get("dangerousInsecureTransportProtocol").is_none());
+
+    // A minisign public key, as `tauri signer generate` writes it: base64 of
+    // a comment line and a base64 Ed25519 key ("Ed", 8-byte id, 32 bytes).
+    let pubkey = updater["pubkey"].as_str().expect("a public key is set");
+    let text = base64_decode(pubkey)
+        .and_then(|b| String::from_utf8(b).ok())
+        .expect("the updater public key is base64 text; run `npx tauri signer generate`");
+    let mut lines = text.lines();
+    assert!(
+        lines
+            .next()
+            .is_some_and(|l| l.starts_with("untrusted comment: minisign public key")),
+        "{text}"
+    );
+    let key = lines.next().and_then(base64_decode).expect("a key line");
+    assert_eq!(key.len(), 42, "{text}");
+    assert_eq!(&key[..2], b"Ed");
+}
+
+#[test]
+fn the_publish_workflow_signs_updates_and_publishes_the_manifest() {
+    let publish = fs::read_to_string(repo_root().join(".github/workflows/publish.yml")).unwrap();
+    for needle in [
+        "TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+        r#""createUpdaterArtifacts":true"#,
+        "scripts/updater-manifest.mjs",
+    ] {
+        assert!(publish.contains(needle), "publish.yml lacks {needle}");
+    }
+    let pages = fs::read_to_string(repo_root().join(".github/workflows/pages.yml")).unwrap();
+    assert!(pages.contains("site/build.mjs"));
 }
 
 #[test]

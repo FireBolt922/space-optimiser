@@ -9,6 +9,15 @@ minor version can change behaviour.
 
 ### Added
 
+- **Check for updates** in Settings. The app asks the download page on
+  GitHub for the newest version only when you press the button, or at
+  start if you turn that on (it is off by default); it sends no file names
+  or paths. On macOS and Windows, Download and install fetches the update,
+  verifies it against the project's signing key, and installs it, never
+  while a scan or cleanup is running; on macOS, Restart now finishes the
+  update. On Ubuntu, and on a Mac whose app folder your account cannot
+  change, it opens the download page instead, because installing there
+  needs an administrator password, which the app never asks for.
 - **Overview**, a new first page that the app opens on. It shows memory,
   swap, and CPU in use, the five apps using the most memory and the five
   using the most CPU (by name; processes with the same name are added
