@@ -596,13 +596,12 @@ mod sys {
                     return Err(SkipCause::Entry(SkipReason::Project));
                 }
                 let facts = stat_at(dir, &name).map_err(|_| unreadable)?;
-                if facts.kind != Kind::Link {
-                    if let Some(reason) =
+                if facts.kind != Kind::Link
+                    && let Some(reason) =
                         policy::entry_rule(self.row, self.ctx, &facts, self.device)
                             .or_else(|| policy::name_rule(self.row, &name, facts.kind))
-                    {
-                        return Err(SkipCause::Entry(reason));
-                    }
+                {
+                    return Err(SkipCause::Entry(reason));
                 }
                 if !self.is_member(facts.id) {
                     return Err(SkipCause::ChangedSinceScan);
