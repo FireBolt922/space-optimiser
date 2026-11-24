@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
+import { Scanning } from "./screens/Scanning";
 import {
   CANDIDATES,
   ANDROID_CANDIDATES,
@@ -138,15 +139,25 @@ describe("scanning", () => {
   });
 
   it("shows how long the scan has been running", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderCleanUp(fakeEngine({ scanRuns: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
+    expect(await screen.findByText(/^Running for /)).toBeTruthy();
+  });
+
+  // The clock alone, with a fixed start and fully fake timers: no polling,
+  // so the result cannot depend on how fast the runner is. (Mixing
+  // shouldAdvanceTime with findBy polling failed now and then on CI.)
+  it("the clock counts from the scan's start and ticks each second", () => {
+    vi.useFakeTimers();
     try {
-      renderCleanUp(fakeEngine({ scanRuns: true }));
-      fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
-      expect(await screen.findByText(/^Running for /)).toBeTruthy();
-      await act(async () => {
-        vi.advanceTimersByTime(72_000);
+      const props = { view: undefined, cancelling: false, onCancel: () => {} };
+      const { unmount } = render(<Scanning {...props} startedAt={Date.now() - 72_000} />);
+      expect(screen.getByText("Running for 1 minute 12 seconds")).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(5_000);
       });
-      expect(screen.getByText(/^Running for 1 minute 1[23] seconds$/)).toBeTruthy();
+      expect(screen.getByText("Running for 1 minute 17 seconds")).toBeTruthy();
+      unmount();
     } finally {
       vi.useRealTimers();
     }
