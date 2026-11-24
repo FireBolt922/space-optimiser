@@ -4,6 +4,7 @@ import type {
   AppInfo,
   Candidate,
   DevAssets,
+  DiskUsage,
   Engine,
   EngineError,
   ExecuteStart,
@@ -12,6 +13,7 @@ import type {
   Report,
   RunView,
   ScanView,
+  SystemUsage,
 } from "../engine";
 
 export const XSS_NAME = "<img src=x onerror=alert(1)>";
@@ -504,6 +506,33 @@ export const APP_INFO: AppInfo = {
   export_folder: "/Users/test/Downloads",
 };
 
+const GIB = 1024 ** 3;
+
+/** A second reading: memory, swap, CPU, and both process lists. */
+export const SYSTEM_USAGE: SystemUsage = {
+  memory: { total_bytes: 16 * GIB, used_bytes: 11 * GIB },
+  swap: { total_bytes: 2 * GIB, used_bytes: GIB / 2 },
+  cpu_percent: 23.4,
+  logical_cpus: 10,
+  top_memory: [
+    { name: "Google Chrome Helper (Renderer)", memory_bytes: 3 * GIB, cpu_percent: 4.2, count: 14 },
+    { name: XSS_NAME, memory_bytes: 2 * GIB, cpu_percent: 0.1, count: 1 },
+    { name: "Code Helper", memory_bytes: GIB, cpu_percent: 1.5, count: 6 },
+  ],
+  top_cpu: [
+    { name: "rustc", memory_bytes: GIB / 4, cpu_percent: 12.5, count: 3 },
+    { name: "Google Chrome Helper (Renderer)", memory_bytes: 3 * GIB, cpu_percent: 4.2, count: 14 },
+  ],
+};
+
+/** 494 GB disk with 182 GB free. */
+export const DISK_USAGE: DiskUsage = {
+  location_label: "The disk that holds your home folder",
+  total_bytes: 494_000_000_000,
+  free_bytes: 182_000_000_000,
+  used_bytes: 312_000_000_000,
+};
+
 export interface FakeOptions {
   scan?: ScanView;
   /** The scan stays "running" until it is cancelled. */
@@ -519,6 +548,9 @@ export interface FakeOptions {
   platform?: AppInfo["platform"];
   revealError?: EngineError;
   exportError?: EngineError;
+  systemUsage?: SystemUsage;
+  systemError?: EngineError;
+  diskError?: EngineError;
 }
 
 export function fakeEngine(options: FakeOptions = {}) {
@@ -582,6 +614,14 @@ export function fakeEngine(options: FakeOptions = {}) {
       ...APP_INFO,
       platform: options.platform ?? APP_INFO.platform,
     })),
+    systemUsage: vi.fn(async (): Promise<SystemUsage> => {
+      if (options.systemError) throw options.systemError;
+      return options.systemUsage ?? SYSTEM_USAGE;
+    }),
+    diskUsage: vi.fn(async (): Promise<DiskUsage> => {
+      if (options.diskError) throw options.diskError;
+      return DISK_USAGE;
+    }),
   } satisfies Engine;
   return engine;
 }

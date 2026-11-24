@@ -12,6 +12,21 @@ export function formatBytes(bytes: number): string {
   return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${UNITS[unit]}`;
 }
 
+/**
+ * Memory in binary units with the usual labels (1 GB = 1024³ bytes), as
+ * Activity Monitor and Task Manager show it: 16 GB of RAM reads "16.0 GB".
+ */
+export function formatMemory(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${UNITS[unit]}`;
+}
+
 const COUNT = new Intl.NumberFormat("en-US");
 
 /** 2203944 → "2,203,944". */

@@ -19,7 +19,9 @@
 //! ([`projects`]: dependency and build folders, found by marker and offered
 //! only inside source control) and Android ([`android`]: Quick Boot
 //! snapshots and system images no emulator references), and a report row
-//! for Chrome's on-device AI model.
+//! for Chrome's on-device AI model. Phase 14 adds the Overview: memory, CPU,
+//! and the busiest processes from [`monitor`] (read only; it never signals
+//! a process), and the size and free space of the home folder's disk.
 
 mod android;
 mod audit;
@@ -32,6 +34,7 @@ mod export;
 pub mod guard;
 pub mod measure;
 pub mod model;
+pub mod monitor;
 pub mod platform;
 pub mod policy;
 mod process;
@@ -83,6 +86,8 @@ pub enum EngineError {
     ExportFailed(String),
     #[error("Space Optimiser does not run as administrator")]
     RunningElevated,
+    #[error("could not read the size of the disk: {0}")]
+    DiskSpace(String),
 }
 
 impl EngineError {
@@ -105,6 +110,7 @@ impl EngineError {
             EngineError::RunNotFinished => "run_not_finished",
             EngineError::ExportFailed(_) => "export_failed",
             EngineError::RunningElevated => "running_elevated",
+            EngineError::DiskSpace(_) => "disk_space",
         }
     }
 }

@@ -368,13 +368,15 @@ fn safety_7_no_network_clients_and_no_granted_capabilities() {
         }
     }
 
-    // The engine's dependencies are exactly the reviewed set.
+    // The engine's dependencies are exactly the reviewed set. `sysinfo`
+    // (phase 14) is built with only its `system` feature: no network code.
     let engine_toml = fs::read_to_string(manifest.join("Cargo.toml")).unwrap();
     let deps = dependency_names(&engine_toml, false);
     let expected: BTreeSet<String> = [
         "serde",
         "serde_json",
         "thiserror",
+        "sysinfo",
         "libc",
         "rustix",
         "windows-sys",
@@ -390,6 +392,16 @@ fn safety_7_no_network_clients_and_no_granted_capabilities() {
         dev,
         "engine dev-dependencies changed"
     );
+
+    // `sysinfo` has network, disk, user, and component readers behind
+    // features; only `system` is on.
+    let workspace_toml = fs::read_to_string(manifest.join("../../Cargo.toml")).unwrap();
+    let sysinfo = workspace_toml
+        .lines()
+        .find(|l| l.starts_with("sysinfo"))
+        .expect("sysinfo in the workspace dependencies");
+    assert!(sysinfo.contains("default-features = false"), "{sysinfo}");
+    assert!(sysinfo.contains(r#"features = ["system"]"#), "{sysinfo}");
 
     // The shell installs no plugin and grants no permission.
     let shell_toml = fs::read_to_string(desktop.join("src-tauri/Cargo.toml")).unwrap();

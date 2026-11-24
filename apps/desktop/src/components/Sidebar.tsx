@@ -1,10 +1,11 @@
 import type { ComponentType } from "react";
 import appIcon from "../../src-tauri/icons/source/space-optimiser-app-icon.svg";
-import { HelpIcon, InfoIcon, ScanIcon, SettingsIcon } from "../icons";
+import { HelpIcon, InfoIcon, OverviewIcon, ScanIcon, SettingsIcon } from "../icons";
 
-export type View = "cleanup" | "settings" | "help" | "about";
+export type View = "overview" | "cleanup" | "settings" | "help" | "about";
 
 const ITEMS: { view: View; label: string; Icon: ComponentType }[] = [
+  { view: "overview", label: "Overview", Icon: OverviewIcon },
   { view: "cleanup", label: "Clean up", Icon: ScanIcon },
   { view: "settings", label: "Settings", Icon: SettingsIcon },
   { view: "help", label: "Help", Icon: HelpIcon },

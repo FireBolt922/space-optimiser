@@ -448,6 +448,7 @@ fn new_errors_reach_the_ui_as_a_kind_and_a_message() {
             "export_failed",
         ),
         (EngineError::RunningElevated, "running_elevated"),
+        (EngineError::DiskSpace("not found".into()), "disk_space"),
     ] {
         let json = serde_json::to_value(&error).unwrap();
         assert_eq!(json["kind"], kind);

@@ -20,5 +20,8 @@ rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs"
 windows-sys = "=0.61.2"
 tempfile = "=3.27.0"
 trybuild = "=1.0.125"
+# Memory, CPU, and process figures for the Overview (phase 14). Only the
+# `system` feature; 0.38 is the newest release that supports Rust 1.88.
+sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }
 tauri = { version = "=2.11.6", features = [] }
 tauri-build = { version = "=2.6.3", features = [] }

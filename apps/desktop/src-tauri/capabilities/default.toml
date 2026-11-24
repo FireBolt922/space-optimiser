@@ -6,8 +6,10 @@
 #   progress, so it needs no event permission either.
 # - The app's own commands (start_scan, cancel_scan, get_scan, build_plan,
 #   confirm_plan, execute_plan, get_run, stop_run, interrupted_run, reveal,
-#   export_report, app_info) take typed payloads with deny_unknown_fields,
-#   or none. None accepts a path; reveal and export_report take an id.
+#   export_report, app_info, system_usage, disk_usage) take typed payloads
+#   with deny_unknown_fields, or none. None accepts a path; reveal and
+#   export_report take an id. system_usage and disk_usage (phase 14) take
+#   nothing and only read.
 # - The webview loads no remote content; see the CSP in tauri.conf.json.
 identifier = "default"
 description = "The main window. Grants nothing beyond the app's own typed commands."

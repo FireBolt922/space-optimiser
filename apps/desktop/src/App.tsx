@@ -1,4 +1,5 @@
-// Scan, review, confirm, run, and report, plus Settings, Help, and About.
+// The Overview, then scan, review, confirm, run, and report, plus Settings,
+// Help, and About.
 // The UI holds ids only. It never builds a path, and file names are always
 // rendered as text; dangerouslySetInnerHTML is banned by the lint config.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,6 +25,7 @@ import { ReportScreen } from "./screens/ReportScreen";
 import { Settings } from "./screens/Settings";
 import { Help } from "./screens/Help";
 import { About } from "./screens/About";
+import { Overview } from "./screens/Overview";
 import { Sidebar, type View } from "./components/Sidebar";
 import { useTheme } from "./theme";
 
@@ -65,7 +67,7 @@ export default function App({ engine }: { engine: Engine }) {
   const [interrupted, setInterrupted] = useState<InterruptedRun | null>(null);
   // The view is separate from the clean-up screen, so a scan or a run keeps
   // polling while Settings, Help, or About is open.
-  const [view, setView] = useState<View>("cleanup");
+  const [view, setView] = useState<View>("overview");
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [theme, setTheme] = useTheme();
   const main = useRef<HTMLElement>(null);
@@ -79,7 +81,14 @@ export default function App({ engine }: { engine: Engine }) {
   }>({ mode: "deep", startedAt: 0 });
 
   useEffect(() => {
-    engine.interruptedRun().then(setInterrupted, () => setInterrupted(null));
+    engine.interruptedRun().then(
+      (run) => {
+        setInterrupted(run);
+        // An interrupted cleanup is reported on Clean up, so open there.
+        if (run) setView((v) => (v === "overview" ? "cleanup" : v));
+      },
+      () => setInterrupted(null),
+    );
     engine.appInfo().then(setInfo, () => setInfo(null));
   }, [engine]);
 
@@ -314,6 +323,13 @@ export default function App({ engine }: { engine: Engine }) {
     <div className="app">
       <Sidebar view={view} version={info?.version ?? null} onNavigate={setView} />
       <main className="app-main" ref={main}>
+        {view === "overview" && (
+          <Overview
+            engine={engine}
+            platform={info?.platform ?? null}
+            onCleanUp={() => setView("cleanup")}
+          />
+        )}
         {view === "cleanup" && cleanupScreen}
         {view === "settings" && <Settings theme={theme} onTheme={setTheme} />}
         {view === "help" && <Help info={info} />}
