@@ -6,8 +6,8 @@
 # auto (the default) reads the Conventional Commit lines since the last
 # v* tag: a breaking change (`!` after the type, or a BREAKING CHANGE
 # footer) raises MAJOR (MINOR before 1.0.0), feat raises MINOR, and fix,
-# perf, or revert raise PATCH. Other commits alone (docs, ci, build, ...)
-# are not a release; pass the part to raise to release anyway.
+# perf, or revert raise PATCH. Anything else (docs, ci, build, ...) also
+# raises PATCH, so a release never stops for want of a feature or a fix.
 set -eu
 
 bump=${1:-auto}
@@ -28,12 +28,8 @@ if [ "$bump" = auto ]; then
     if [ "$major" -eq 0 ]; then bump="minor"; else bump="major"; fi
   elif printf '%s\n' "$log" | grep -Eiq '^feat([(/]|!?:)'; then
     bump="minor"
-  elif printf '%s\n' "$log" | grep -Eiq '^(fix|perf|revert)([(/]|!?:)'; then
-    bump="patch"
   else
-    echo "No feat, fix, perf, or revert commit since ${last:-the first commit}: nothing to release." >&2
-    echo "Pass major, minor, or patch to release anyway." >&2
-    exit 1
+    bump="patch"
   fi
 fi
 
