@@ -7,8 +7,9 @@ as to coding agents.
 
 ## Before you start
 
-- Open an issue for anything bigger than a typo so the approach can be agreed
-  before you write code. New cleanup rules especially: the catalog is an
+- Small fixes, docs, and UI tweaks: just open a pull request.
+- For a new cleanup rule or a larger feature, open an issue first so the
+  approach can be agreed before you write code. The cleanup catalog is an
   allowlist, and a row is added only after its risks are written down.
 - Check [SECURITY.md](SECURITY.md) if your change touches path validation,
   deletion, or process execution.
@@ -26,15 +27,16 @@ npm --prefix apps/desktop ci
 ```
 
 `npm ci` at the root installs [lefthook](https://github.com/evilmartians/lefthook)
-and registers the git hooks. They run on every commit and push:
+and registers two small git hooks. They take seconds and mostly fix things
+for you:
 
-| Hook         | What runs                                                                              |
-| ------------ | -------------------------------------------------------------------------------------- |
-| `pre-commit` | `cargo fmt` on staged Rust, prettier and eslint on staged UI files, a large-file guard |
-| `commit-msg` | commitlint (Conventional Commits, see below)                                           |
-| `pre-push`   | `cargo clippy -D warnings`, `cargo test --workspace`, UI lint and tests                |
+| Hook         | What runs                                                                             |
+| ------------ | ------------------------------------------------------------------------------------- |
+| `pre-commit` | formats staged Rust (`rustfmt`) and other files (Prettier), large-file guard          |
+| `pre-push`   | `scripts/hygiene.sh`: deletes only in the executor, processes only in the tool runner |
 
-If a hook fails, fix the cause; do not use `--no-verify`.
+CI runs the full suite on macOS, Ubuntu, and Windows for every pull request.
+To run the same checks locally first, use `npm run check`.
 
 ## Day-to-day commands
 
@@ -50,36 +52,39 @@ scripts/fixture-home.sh                # try a cleanup on a copy of the fixture 
 
 ## Branches and commits
 
-- Branch from `main`. Name the branch `<type>/<short-topic>`, for example
-  `fix/temp-root-project-marker` or `docs/contributing`.
-- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+- Branch from `main`, with any branch name. Maintainers use
+  `<type>/<short-topic>`, for example `fix/temp-root-project-marker`.
+- Commits on your branch can say anything: pull requests are squash-merged,
+  so only the **pull request title** lands on `main`. The title is a
+  [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/) line,
+  and CI checks it:
 
   ```text
-  <type>(<scope>): <summary in the imperative, lower case, no full stop>
-
-  <body: what changed and why, wrapped at 72 columns>
+  <type>(<optional scope>): <summary>
   ```
 
   Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`,
-  `chore`, `revert`. Scopes are optional; use `engine`, `desktop`, `ci`,
-  `docs`, or `release` when one fits. A breaking change adds `!` after the
-  type and a `BREAKING CHANGE:` footer.
+  `chore`, `revert`. A scope is optional and can be any word that names the
+  area, such as `engine`, `desktop`, `ci`, or `updater`. A breaking change
+  adds `!` after the type and a `BREAKING CHANGE:` footer.
 
-- Pull requests are squash-merged, and the PR title must itself be a valid
-  Conventional Commit line; CI checks it.
+- The type matters because the release workflow reads it to pick the next
+  version. If you get the title wrong, a maintainer can fix it before merging.
 
 ## Pull requests
 
 `main` is protected by the rulesets in `.github/rulesets/` (importable from
-Settings → Rules → Rulesets): no direct pushes, squash merge only, and
-every CI job must pass on the latest commit. Release tags cannot be moved
-or deleted.
+Settings → Rules → Rulesets): no direct pushes, squash merge only, and the
+tests, formatting, and dependency checks must pass. You do not need to
+rebase when `main` moves on, unless there is a conflict. Release tags
+cannot be moved or deleted.
 
 - Keep a PR to one topic. Small PRs are reviewed quickly.
-- CI must be green on all three operating systems before merge.
-- Fill in the PR template. For an engine change, name the test that fails
-  without your change.
-- Update `CHANGELOG.md` under **Unreleased**.
+- CI must be green on all three operating systems before merge. A first
+  pull request from a new contributor waits for a maintainer to start CI.
+- For an engine change, name the test that fails without your change.
+- A line in `CHANGELOG.md` under **Unreleased** is welcome; if you leave it
+  out, a maintainer adds it.
 
 ## Rules for engine changes
 

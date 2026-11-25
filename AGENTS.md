@@ -23,8 +23,8 @@ Read this file and the relevant plan before changing the repository.
 
 ## Commits, branches, and hooks
 
-- Branch names are `<type>/<topic>` (`fix/temp-root-project-marker`). Commit messages and pull request titles follow Conventional Commits with the types and scopes in `commitlint.config.cjs`. Pull requests are squash-merged.
-- `npm ci` at the repository root installs the lefthook hooks. Never commit or push with `--no-verify`. If a hook fails, fix the cause.
+- Name branches `<type>/<topic>` (`fix/temp-root-project-marker`); it is a convention, not enforced. Pull request titles follow Conventional Commits with the types in `commitlint.config.cjs`; the scope is optional and free. CI checks only the title, because pull requests are squash-merged. Write branch commits in the same style anyway.
+- `npm ci` at the repository root installs the lefthook hooks (formatting, large files, hygiene). Never commit or push with `--no-verify`. If a hook fails, fix the cause. Run `npm run check` before pushing a change to code.
 - `CHANGELOG.md` gets a line under **Unreleased** for every user-visible change.
 - CI must be green on macOS, Ubuntu, and Windows before a merge. A new GitHub Action is pinned to a commit SHA with its version in a comment.
 

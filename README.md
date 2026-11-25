@@ -106,11 +106,11 @@ cargo test --workspace
 npm --prefix apps/desktop run tauri dev
 ```
 
-The root `npm ci` installs [lefthook](https://github.com/evilmartians/lefthook) hooks: formatting and lint on commit, Conventional Commits on the message, and clippy plus the full test suite on push. Branch names are `<type>/<topic>`.
+The root `npm ci` installs two quick [lefthook](https://github.com/evilmartians/lefthook) hooks: formatting on commit and the delete/process-start check on push. `npm run check` runs the full CI suite locally. Only the pull request title needs to be a Conventional Commit; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 To try a cleanup without touching your own files, run `scripts/fixture-home.sh`. It copies the test fixture home into a temporary folder and prints the command that points a debug build at it. Release builds ignore that setting.
 
-CI runs on every pull request and on `main`: the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows; Prettier and commit-message checks; `cargo deny` and `npm audit`; and a coverage report. All of it must be green before a merge. Dependabot opens weekly update PRs.
+CI runs on every pull request and on `main`: the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows; Prettier and commit-message checks; `cargo deny` and `npm audit`; and a coverage report. The tests, formatting, and dependency checks must be green before a merge. Dependabot opens weekly update PRs.
 
 ## Releasing
 

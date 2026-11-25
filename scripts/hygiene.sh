@@ -1,7 +1,7 @@
 #!/bin/sh
 # Deletes exist only in the executor and processes start only in the tool
 # runner. tests/hygiene.rs names these calls in order to forbid them, so it
-# is excluded. CI and the pre-push hook both run this script.
+# is excluded. CI, the pre-push hook, and `npm run check` run this script.
 set -eu
 cd "$(dirname "$0")/.."
 
