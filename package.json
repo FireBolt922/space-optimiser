@@ -5,6 +5,7 @@
   "description": "Repository tooling only: git hooks, commit linting, and formatting. The app lives in apps/desktop and crates/engine.",
   "scripts": {
     "prepare": "lefthook install",
+    "check": "scripts/check.sh",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "commitlint": "commitlint"
