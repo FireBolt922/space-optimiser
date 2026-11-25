@@ -35,8 +35,9 @@ for you:
 | `pre-commit` | formats staged Rust (`rustfmt`) and other files (Prettier), large-file guard          |
 | `pre-push`   | `scripts/hygiene.sh`: deletes only in the executor, processes only in the tool runner |
 
-CI runs the full suite on macOS, Ubuntu, and Windows for every pull request.
-To run the same checks locally first, use `npm run check`.
+CI runs the full suite on macOS, Ubuntu, and Windows for every pull request
+(a change to documentation only skips the builds and tests). To run the same
+checks locally first, use `npm run check`.
 
 ## Day-to-day commands
 
@@ -80,8 +81,8 @@ rebase when `main` moves on, unless there is a conflict. Release tags
 cannot be moved or deleted.
 
 - Keep a PR to one topic. Small PRs are reviewed quickly.
-- CI must be green on all three operating systems before merge. A first
-  pull request from a new contributor waits for a maintainer to start CI.
+- The "CI passed" check must be green before merge. A first pull request
+  from a new contributor waits for a maintainer to start CI.
 - For an engine change, name the test that fails without your change.
 - A line in `CHANGELOG.md` under **Unreleased** is welcome; if you leave it
   out, a maintainer adds it.
@@ -105,6 +106,6 @@ cannot be moved or deleted.
 
 ## Releases
 
-Maintainers run the Release workflow from `main`. It opens a version pull
-request, merges it when CI is green, and starts the build that publishes
-the installers. See the README.
+Maintainers run the Release workflow from `main`. One run raises the
+version, builds the installers, publishes the release, and updates the
+download page. See the README.

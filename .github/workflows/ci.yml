@@ -1,25 +1,58 @@
 name: CI
 
-# Runs on every pull request and on every commit that lands on main. The
-# Release and Publish workflows refuse a commit without a green CI run.
-# The Release workflow also starts it by hand on a release branch, because
-# a pull request opened with the workflow token does not start CI.
+# Runs on pull requests: a pull request is tested once, and merging it
+# starts nothing. A pull request that changes only documentation skips the
+# builds and tests. The one required check is "CI passed", which sums up
+# the jobs below. Coverage runs only by hand: Actions → CI → Run workflow.
+# A weekly run on main refreshes the build cache that pull requests start
+# from and checks for new dependency advisories.
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 1"
 
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run for the old one.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      dependencies: ${{ steps.diff.outputs.dependencies }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # the merge commit and the base it was made on
+
+      # Documentation is Markdown, docs/, the download page (its own tests
+      # run in "formatting and commit messages"), and GitHub's templates.
+      - name: Compare with the base branch
+        id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "dependencies=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only HEAD^1 HEAD)
+          printf '%s\n' "$files"
+          code=$(printf '%s\n' "$files" | grep -Ev '(\.md$|^docs/|^site/|^LICENSE|^\.github/(ISSUE_TEMPLATE|rulesets)/)' || true)
+          deps=$(printf '%s\n' "$files" | grep -E '(^|/)(Cargo\.toml|Cargo\.lock|deny\.toml|package\.json|package-lock\.json)$' || true)
+          echo "code=$([ -n "$code" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "dependencies=$([ -n "$deps" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +68,10 @@ jobs:
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustc --version
+
+      # Keeps compiled dependencies between runs. Pull requests start from
+      # the cache of the weekly run on main.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install WebKitGTK (Ubuntu)
         if: runner.os == 'Linux'
@@ -101,8 +138,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -126,16 +161,10 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s\n' "$TITLE" | npx commitlint
 
-      - name: Commits on main are Conventional Commits
-        if: github.event_name == 'push'
-        run: npx commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}"
-
-      - name: Commits on the branch are Conventional Commits
-        if: github.event_name == 'workflow_dispatch'
-        run: npx commitlint --from "$(git merge-base origin/main HEAD)" --to HEAD
-
   dependencies:
     name: dependency licences and advisories
+    needs: changes
+    if: needs.changes.outputs.dependencies == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,6 +185,7 @@ jobs:
 
   coverage:
     name: test coverage
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,3 +245,21 @@ jobs:
             coverage/
             apps/desktop/coverage/
           retention-days: 14
+
+  # The only check the main-branch ruleset requires. A skipped job (a
+  # documentation-only change) counts as passed; a failed or cancelled
+  # one does not.
+  result:
+    name: CI passed
+    needs: [changes, test, tooling, dependencies]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do
+            case $r in success | skipped) ;; *) exit 1 ;; esac
+          done

@@ -1,7 +1,7 @@
 name: Pages
 
 # Builds the download page (site/) from the published releases and deploys
-# it to GitHub Pages. The Publish workflow starts it after each release. It
+# it to GitHub Pages. The Release workflow runs it as its last step. It
 # also runs when the page's files change, once a day (to pick up a release
 # edited by hand, such as a pre-release marked as a full release), and by
 # hand from Actions → Pages → Run workflow.
@@ -23,15 +23,10 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
-
-# One deployment at a time; a queued run waits rather than cancelling a
-# deployment halfway.
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -61,6 +56,11 @@ jobs:
     name: deploy
     needs: build
     runs-on: ubuntu-latest
+    # One deployment at a time; a queued one waits rather than cancelling
+    # a deployment halfway.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
