@@ -7,6 +7,14 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-25
+
+### Changed
+
+- Release in one run and run CI only on pull requests (#55)
+- Let a release run without stopping on version or changelog guards (#54)
+- Make contributing easier with lighter hooks and merge rules (#53)
+
 ## [0.5.0] - 2026-11-24
 
 ### Added
@@ -147,7 +155,8 @@ unsigned installers for macOS, Ubuntu, and Windows.
 - The Trash folders are on the protected list, so the large-file report
   never looks inside them.
 
-[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/FireBolt922/space-optimiser/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.2.0...v0.3.0
