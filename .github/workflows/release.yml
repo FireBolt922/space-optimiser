@@ -2,10 +2,12 @@ name: Release
 
 # Releases with one click: Actions → Release → Run workflow on main. It
 # raises the version (from the commits since the last tag, or the part you
-# pick), moves the Unreleased changelog entries into a dated section, opens
-# a pull request with those changes, runs CI on it, and merges it when CI
-# is green. It then starts Publish, which builds the installers, tags the
-# commit, creates the release page, and rebuilds the download page.
+# pick; with no feature or fix it is a patch), moves the Unreleased
+# changelog entries into a dated section (or lists the commits when there
+# are none), opens a pull request with those changes, runs CI on it, and
+# merges it when CI is green. It then starts Publish, which builds the
+# installers, tags the commit, creates the release page, and rebuilds the
+# download page.
 # Nothing is built or tagged here.
 #
 # If CI fails, the pull request stays open and nothing is released. Fix
@@ -20,7 +22,7 @@ on:
       bump:
         description: >-
           auto: decided by the commits since the last tag (a feature
-          raises MINOR, a fix raises PATCH). Or pick the part to raise.
+          raises MINOR, anything else PATCH). Or pick the part to raise.
         type: choice
         options: [auto, patch, minor, major]
         default: auto
@@ -60,21 +62,13 @@ jobs:
           echo "Run the Release workflow from main, not ${GITHUB_REF}." >&2
           exit 1
 
-      # A release starts from a commit whose tests passed.
-      - name: CI passed on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-            --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
-          if [ "$passed" -lt 1 ]; then
-            echo "CI has not passed on ${GITHUB_SHA}. Wait for the CI run on main to go green." >&2
-            exit 1
-          fi
-
+      # CI runs on the release pull request below, so main's own CI run
+      # need not have finished. A release branch left by an earlier run
+      # that did not finish is closed and replaced.
       - name: Choose the version
         id: version
         env:
+          GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
         run: |
           current=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
@@ -85,8 +79,9 @@ jobs:
           next=$(scripts/next-version.sh "$BUMP")
           branch="chore/release-v${next}"
           if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
-            echo "Branch ${branch} exists: a release pull request for v${next} is already open. Merge or close it first." >&2
-            exit 1
+            echo "Replacing the unfinished release branch ${branch}."
+            gh pr close "$branch" --repo "$GITHUB_REPOSITORY" --comment "Replaced by a new Release run." || true
+            git push origin --delete "$branch"
           fi
           {
             echo "current=$current"
