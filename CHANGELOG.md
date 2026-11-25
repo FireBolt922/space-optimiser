@@ -7,6 +7,8 @@ minor version can change behaviour.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
 ### Added
 
 - **Check for updates** in Settings. The app asks the download page on
@@ -145,7 +147,8 @@ unsigned installers for macOS, Ubuntu, and Windows.
 - The Trash folders are on the protected list, so the large-file report
   never looks inside them.
 
-[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/FireBolt922/space-optimiser/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FireBolt922/space-optimiser/compare/v0.1.0...v0.2.0
