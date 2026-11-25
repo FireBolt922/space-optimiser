@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the body of one version's section of CHANGELOG.md, for release
-# notes and the release pull request.
+# notes and the updater manifest.
 #
 #   scripts/changelog-section.sh 0.2.0
 set -eu

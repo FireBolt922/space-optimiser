@@ -77,7 +77,7 @@ Both scans also show the AI model Chrome keeps on the computer, with its size an
 
 "Select safe items" picks only the low-risk rows: old temporary files, and on Ubuntu the thumbnail and font caches (old logs on macOS in Deep Scan). It never picks anything the Projects and Android tools find.
 
-**Updates**: Settings → Check for updates asks the download page for the newest version, only when you press it or, if you turn it on, at start. On macOS and Windows the app downloads the update, verifies its signature against the key in `tauri.conf.json`, and installs it; on Ubuntu it opens the download page. Releases are signed for the updater by the publish workflow (`TAURI_SIGNING_PRIVATE_KEY`), which also publishes `latest.json`; the download page serves the newest one.
+**Updates**: Settings → Check for updates asks the download page for the newest version, only when you press it or, if you turn it on, at start. On macOS and Windows the app downloads the update, verifies its signature against the key in `tauri.conf.json`, and installs it; on Ubuntu it opens the download page. Releases are signed for the updater by the Release workflow (`TAURI_SIGNING_PRIVATE_KEY`), which also publishes `latest.json`; the download page serves the newest one.
 
 Planning notes are kept locally and are not tracked in this repository. Cloning the repository does not bring them with it; the catalog of cleanup rules is summarised in `docs/release-notes-draft.md` and in the engine's `crates/engine/src/policy.rs`.
 
@@ -110,23 +110,31 @@ The root `npm ci` installs two quick [lefthook](https://github.com/evilmartians/
 
 To try a cleanup without touching your own files, run `scripts/fixture-home.sh`. It copies the test fixture home into a temporary folder and prints the command that points a debug build at it. Release builds ignore that setting.
 
-CI runs on every pull request and on `main`: the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows; Prettier and commit-message checks; `cargo deny` and `npm audit`; and a coverage report. The tests, formatting, and dependency checks must be green before a merge. Dependabot opens weekly update PRs.
+CI runs on pull requests only, not again after a merge: the UI lint and tests, formatting, clippy, and `cargo test --workspace` on macOS, Ubuntu, and Windows; Prettier and the pull request title; and `cargo deny` and `npm audit` when dependencies change. A pull request that changes only documentation skips the builds and tests. The one required check, "CI passed", must be green before a merge. A weekly run on `main` refreshes the build cache and checks for new advisories; the coverage report runs by hand (Actions → CI → Run workflow). Dependabot opens weekly update PRs.
 
 ## Releasing
 
-A release is one click in the Actions tab, never a push to `main`.
+A release is one run of the Release workflow, about ten minutes:
 
-1. Open Actions → Release → Run workflow on `main`, or run `gh workflow run release.yml --ref main`. Leave `bump` on `auto` (a feature since the last tag raises the minor version, anything else the patch version) or pick the part to raise, and pick a channel: `prerelease` for testers (the default), `draft` to check the page first, or `release`.
-2. The workflow raises the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and `package-lock.json`, moves the **Unreleased** entries of `CHANGELOG.md` into a dated section (when there are none, it lists the commit titles since the last tag instead), opens a pull request `chore(release): vX.Y.Z`, and runs CI on it.
-3. When CI is green, the workflow merges the pull request and starts Publish, which builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers, creates the `vX.Y.Z` tag, and publishes the release page with the changelog section and a `SHA256SUMS.txt`.
+```sh
+gh workflow run release.yml --ref main                      # or Actions → Release → Run workflow
+gh workflow run release.yml --ref main -f channel=release   # a public release instead of a pre-release
+```
 
-The main-branch ruleset still applies to that merge: every required check must be green. If CI fails, the pull request stays open and nothing is released; fix it on the branch and merge by hand, and Publish starts on the merge. A release pull request left open by an earlier run is closed and replaced by the next run. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md). To retry a build that failed after the merge, run Actions → Publish → Run workflow on `main`.
+`bump` is `auto` by default (a feature since the last tag raises the minor version, anything else the patch version), or `patch`, `minor`, or `major`. `channel` is `prerelease` for testers (the default), `draft` to check the page first, or `release`. The run:
 
-After a release, Publish starts the Pages workflow, which rebuilds the [download page](https://firebolt922.github.io/space-optimiser/) from the published releases (drafts are left out). It also runs daily and when `site/` changes, so a release edited by hand shows up within a day, or at once with Actions → Pages → Run workflow. To preview the page locally: `node site/build.mjs --repo FireBolt922/space-optimiser --out _site`, then open `_site/index.html`.
+1. raises the version in `Cargo.toml`, `Cargo.lock`, `package.json`, and `package-lock.json`, moves the **Unreleased** entries of `CHANGELOG.md` into a dated section (when there are none, it lists the commit titles since the last tag), and pushes `chore(release): vX.Y.Z` to `main`;
+2. builds a universal macOS `.dmg`, an Ubuntu `.deb`, and Windows `-setup.exe` and `.msi` installers;
+3. creates the `vX.Y.Z` tag and the release page with the changelog section, `latest.json` for the updater, and a `SHA256SUMS.txt`;
+4. rebuilds the download page.
+
+Tests do not run again: the pull requests that reached `main` passed CI, and the run stops only if the last one failed. If a build fails, run Release again; it builds the same version again instead of raising it. The builds are unsigned. Testers follow [docs/testing-guide.md](docs/testing-guide.md).
+
+The Pages workflow rebuilds the [download page](https://firebolt922.github.io/space-optimiser/) from the published releases (drafts are left out). It also runs daily and when `site/` changes, so a release edited by hand shows up within a day, or at once with Actions → Pages → Run workflow. To preview the page locally: `node site/build.mjs --repo FireBolt922/space-optimiser --out _site`, then open `_site/index.html`.
 
 The download page needs Settings → Pages → Source set to "GitHub Actions". A custom domain is set on the same settings page; the page uses relative links, so nothing in the repository changes.
 
-The Release workflow opens and merges pull requests, so Settings → Actions → General → Workflow permissions must allow GitHub Actions to create and approve pull requests.
+The Release workflow pushes its version commit to `main`, so the main-branch ruleset (`.github/rulesets/main-branch.json`) lists GitHub Actions as allowed to bypass it.
 
 ## Licence
 

@@ -186,18 +186,20 @@ fn the_updater_checks_signed_updates_from_the_download_page() {
 }
 
 #[test]
-fn the_publish_workflow_signs_updates_and_publishes_the_manifest() {
-    let publish = fs::read_to_string(repo_root().join(".github/workflows/publish.yml")).unwrap();
+fn the_release_workflow_signs_updates_and_publishes_the_manifest() {
+    let publish = fs::read_to_string(repo_root().join(".github/workflows/release.yml")).unwrap();
     for needle in [
         "TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
         "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
         r#""createUpdaterArtifacts":true"#,
         "scripts/updater-manifest.mjs",
     ] {
-        assert!(publish.contains(needle), "publish.yml lacks {needle}");
+        assert!(publish.contains(needle), "release.yml lacks {needle}");
     }
+    assert!(publish.contains("uses: ./.github/workflows/pages.yml"));
     let pages = fs::read_to_string(repo_root().join(".github/workflows/pages.yml")).unwrap();
     assert!(pages.contains("site/build.mjs"));
+    assert!(pages.contains("workflow_call:"));
 }
 
 #[test]

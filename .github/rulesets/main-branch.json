@@ -29,13 +29,7 @@
       "parameters": {
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
-        "required_status_checks": [
-          { "context": "test (macos-latest)" },
-          { "context": "test (ubuntu-22.04)" },
-          { "context": "test (windows-latest)" },
-          { "context": "formatting and commit messages" },
-          { "context": "dependency licences and advisories" }
-        ]
+        "required_status_checks": [{ "context": "CI passed" }]
       }
     }
   ],
@@ -43,6 +37,11 @@
     {
       "actor_id": 5,
       "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    },
+    {
+      "actor_id": 15368,
+      "actor_type": "Integration",
       "bypass_mode": "always"
     }
   ]

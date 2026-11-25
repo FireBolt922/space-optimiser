@@ -1,21 +1,30 @@
 name: Release
 
-# Releases with one click: Actions → Release → Run workflow on main. It
-# raises the version (from the commits since the last tag, or the part you
-# pick; with no feature or fix it is a patch), moves the Unreleased
-# changelog entries into a dated section (or lists the commits when there
-# are none), opens a pull request with those changes, runs CI on it, and
-# merges it when CI is green. It then starts Publish, which builds the
-# installers, tags the commit, creates the release page, and rebuilds the
-# download page.
-# Nothing is built or tagged here.
+# One run releases a version: Actions → Release → Run workflow on main, or
+# `gh workflow run release.yml --ref main`.
 #
-# If CI fails, the pull request stays open and nothing is released. Fix
-# the cause on the branch and merge it by hand: Publish starts on that
-# merge by itself.
+#   1. version  raises the version (from the commits since the last tag, or
+#               the part you pick), dates the changelog, and pushes the
+#               "chore(release): vX.Y.Z" commit to main.
+#   2. bundle   builds the macOS, Ubuntu, and Windows installers from it.
+#   3. publish  signs the updater manifest, tags the commit, and creates
+#               the release page.
+#   4. pages    rebuilds the download page.
 #
-# Needs once, in Settings → Actions → General → Workflow permissions:
-# "Allow GitHub Actions to create and approve pull requests".
+# Tests do not run again here: the pull requests that reached main passed
+# CI. The run stops only if the last merged pull request failed CI.
+#
+# If a build fails after step 1, run Release again: a version that is in
+# Cargo.toml but not tagged is built again instead of being raised.
+#
+# Builds are unsigned: signing needs certificates that are not in this
+# repository. Updates are signed with the updater key (see below).
+#
+# Needs once:
+#   - The main-branch ruleset lets GitHub Actions bypass it, so step 1 can
+#     push the version commit (.github/rulesets/main-branch.json).
+#   - Secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+#   - Settings → Pages → Source "GitHub Actions".
 on:
   workflow_dispatch:
     inputs:
@@ -42,15 +51,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pull-request:
-    name: open, test, and merge the release pull request
+  version:
+    name: choose the version
     runs-on: ubuntu-latest
-    # Most of the time is spent waiting for CI on the release branch.
-    timeout-minutes: 180
     permissions:
-      contents: write # push the release branch and merge it
-      pull-requests: write # open and merge the pull request
-      actions: write # read CI runs, start CI, and start Publish
+      contents: write # push the version commit to main
+      actions: read # read the CI result of the last pull request
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,190 +72,288 @@ jobs:
           echo "Run the Release workflow from main, not ${GITHUB_REF}." >&2
           exit 1
 
-      # CI runs on the release pull request below, so main's own CI run
-      # need not have finished. A release branch left by an earlier run
-      # that did not finish is closed and replaced.
+      # No waiting: this reads the result CI already recorded for the pull
+      # request that made this commit, and stops only if it failed.
+      - name: The last merged pull request passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null)][0].head.sha // empty')
+          if [ -z "$head" ]; then
+            echo "${GITHUB_SHA} did not come from a pull request; nothing to check."
+            exit 0
+          fi
+          result=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$head" \
+            --json conclusion --jq '.[0].conclusion // empty')
+          if [ "$result" = failure ]; then
+            echo "CI failed on the pull request that made ${GITHUB_SHA}. Fix main first." >&2
+            exit 1
+          fi
+          echo "CI on ${head}: ${result:-no run found}"
+
       - name: Choose the version
         id: version
         env:
-          GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
         run: |
           current=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if ! git ls-remote --exit-code --tags origin "refs/tags/v${current}" >/dev/null; then
-            echo "v${current} is not released yet. Merge its release pull request, or run the Publish workflow if that is already merged." >&2
-            exit 1
+          if git ls-remote --exit-code --tags origin "refs/tags/v${current}" >/dev/null; then
+            next=$(scripts/next-version.sh "$BUMP")
+            echo "raise=true" >> "$GITHUB_OUTPUT"
+            echo "Version ${current} -> ${next}"
+          else
+            next=$current
+            echo "raise=false" >> "$GITHUB_OUTPUT"
+            echo "v${current} is in Cargo.toml but not released; building it again."
           fi
-          next=$(scripts/next-version.sh "$BUMP")
-          branch="chore/release-v${next}"
-          if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
-            echo "Replacing the unfinished release branch ${branch}."
-            gh pr close "$branch" --repo "$GITHUB_REPOSITORY" --comment "Replaced by a new Release run." || true
-            git push origin --delete "$branch"
-          fi
-          {
-            echo "current=$current"
-            echo "version=$next"
-            echo "branch=$branch"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
 
       # Version comes from rust-toolchain.toml. The bump script rewrites
       # the workspace entries in Cargo.lock with cargo.
       - name: Install Rust
+        if: steps.version.outputs.raise == 'true'
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustc --version
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.version.outputs.raise == 'true'
         with:
           node-version: 24
 
-      - name: Raise the version and date the changelog
+      # A push with the workflow token starts no other workflow, so this
+      # commit runs no CI. It changes only version numbers and the changelog.
+      - name: Commit the version to main
+        id: commit
         env:
+          RAISE: ${{ steps.version.outputs.raise }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/bump-version.sh "$VERSION"
-
-      - name: Push the release branch
-        id: push
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BRANCH: ${{ steps.version.outputs.branch }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git add Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json CHANGELOG.md
-          git commit -m "chore(release): v${VERSION}"
-          git push origin "$BRANCH"
+          if [ "$RAISE" = true ]; then
+            scripts/bump-version.sh "$VERSION"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json CHANGELOG.md
+            git commit -m "chore(release): v${VERSION}"
+            if ! git push origin HEAD:main; then
+              echo "Could not push to main. Either main moved (run Release again), or the main-branch ruleset does not let GitHub Actions bypass it: apply .github/rulesets/main-branch.json." >&2
+              exit 1
+            fi
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Open the pull request
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          CURRENT: ${{ steps.version.outputs.current }}
-          BRANCH: ${{ steps.version.outputs.branch }}
-          CHANNEL: ${{ inputs.channel }}
-        run: |
           {
-            echo "Channel: ${CHANNEL}"
-            echo
-            echo "Raises the version from ${CURRENT} to ${VERSION} and dates the changelog."
-            echo "The Release workflow merges this pull request when CI is green and starts"
-            echo "Publish, which builds the installers, tags \`v${VERSION}\`, and creates the"
-            echo "release page on the channel above. If CI fails, fix it on this branch and"
-            echo "merge by hand; Publish then reads the channel from the first line"
-            echo "(prerelease, draft, or release)."
-            echo
-            echo "## Changes in ${VERSION}"
+            echo "## v${VERSION}"
             echo
             scripts/changelog-section.sh "$VERSION"
-          } > body.md
-          if ! url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
-              --title "chore(release): v${VERSION}" --body-file body.md); then
-            echo "Could not open the pull request. In Settings → Actions → General → Workflow permissions, allow GitHub Actions to create and approve pull requests, then run again." >&2
-            git push origin --delete "$BRANCH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # One .dmg that runs on Apple silicon and Intel Macs. The .app
+          # bundle is built too: the updater ships it as .app.tar.gz.
+          - name: macOS
+            os: macos-latest
+            args: --target universal-apple-darwin --bundles app,dmg
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+          - name: Ubuntu
+            os: ubuntu-22.04
+            args: --bundles deb
+          - name: Windows
+            os: windows-latest
+            args: --bundles nsis,msi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      # Version comes from rust-toolchain.toml, as in CI.
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          if [ -n "${{ matrix.rust_targets }}" ]; then rustup target add ${{ matrix.rust_targets }}; fi
+          rustc --version
+
+      # Release builds keep their own cache, separate from CI's.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release
+
+      - name: Install WebKitGTK (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # `tauri build` runs `npm run build` itself (beforeBuildCommand).
+      # macOS: an ad-hoc signature ("-") only. Without one, Apple silicon
+      # Macs report a downloaded app as damaged instead of offering
+      # "Open Anyway". It is not a Developer ID signature.
+      # Updater files (phase 15) are signed with the updater key, which is
+      # separate from code signing. Only this workflow has the key, so only
+      # it turns createUpdaterArtifacts on.
+      - name: Build installers
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set; updates cannot be signed."
             exit 1
           fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          npx tauri build --ci --config '{"bundle":{"createUpdaterArtifacts":true}}' ${{ matrix.args }}
 
-      # A pull request opened with the workflow token does not start CI by
-      # itself, so CI is started on the branch here.
-      - name: Start CI on the branch
+      # The app checks for updates on Linux too, and the manifest needs a
+      # signed entry for it, so the .deb gets a signature if the bundler
+      # did not make one. The app never installs it (that needs sudo).
+      - name: Sign the .deb for the update check (Ubuntu)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
         env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.version.outputs.branch }}
-        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          for deb in ../../target/release/bundle/deb/*.deb; do
+            [ -f "$deb.sig" ] || npx tauri signer sign "$deb"
+          done
 
-      - name: Summary
+      # Only the installers, the macOS update archive, and their update
+      # signatures. Never audit logs, fixture homes, or test output.
+      # GitHub turns spaces in asset names into dots on upload; doing it
+      # here keeps the names in latest.json the same as the release's.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir dist-release
+          find target -path '*/release/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' -o -name '*.msi' \
+               -o -name '*.app.tar.gz' -o -name '*.sig' \) \
+            -exec cp {} dist-release/ \;
+          for f in dist-release/*\ *; do
+            if [ -e "$f" ]; then mv "$f" "dist-release/$(basename "$f" | tr ' ' '.')"; fi
+          done
+          ls -l dist-release
+          test -n "$(ls dist-release)"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-${{ matrix.name }}
+          path: dist-release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish v${{ needs.version.outputs.version }}
+    needs: [version, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: installers-*
+          path: dist-release
+          merge-multiple: true
+
+      # The updater manifest (phase 15). Fails if a system's update file or
+      # its signature is missing. The download page serves the newest one.
+      - name: Updater manifest
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          URL: ${{ steps.pr.outputs.url }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          scripts/changelog-section.sh "$VERSION" > updater-notes.md
+          node scripts/updater-manifest.mjs --version "$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --dir dist-release --notes updater-notes.md --out dist-release/latest.json
+
+      - name: Checksums
+        working-directory: dist-release
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
           CHANNEL: ${{ inputs.channel }}
         run: |
           {
-            echo "## Release pull request for v${VERSION}"
+            echo "Space Optimiser ${VERSION}."
             echo
-            echo "${URL}"
-            echo
-            echo "It merges when CI is green, and Publish then releases v${VERSION} as a ${CHANNEL}."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # `gh workflow run` returns before the run exists, so the run is
-      # looked up by the commit until it shows.
-      - name: Wait for CI on the branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.push.outputs.sha }}
-          URL: ${{ steps.pr.outputs.url }}
-        run: |
-          run=""
-          for _ in $(seq 1 30); do
-            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
-              --event workflow_dispatch --json databaseId --jq '.[0].databaseId // empty')
-            [ -n "$run" ] && break
-            sleep 10
-          done
-          if [ -z "$run" ]; then
-            echo "CI did not start on ${SHA}. Start it on the branch, then merge ${URL} by hand when it is green." >&2
-            exit 1
-          fi
-          if ! gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 60 >/dev/null; then
-            echo "CI failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run}" >&2
-            echo "Nothing was released. Fix the cause on the branch and merge ${URL} by hand; Publish starts on the merge." >&2
-            exit 1
-          fi
-          echo "CI passed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run}"
-
-      # The ruleset still applies: the merge goes through only with every
-      # required check green and the branch up to date with main.
-      # --match-head-commit refuses if anything was pushed to the branch
-      # after the commit that CI tested. The checks can take a moment to
-      # show as passed after the run ends, so the merge is retried.
-      - name: Merge the pull request
-        id: merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.push.outputs.sha }}
-          URL: ${{ steps.pr.outputs.url }}
-        run: |
-          for attempt in 1 2 3 4 5 6; do
-            if gh pr merge "$URL" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$SHA"; then
-              merged=$(gh pr view "$URL" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)
-              echo "sha=$merged" >> "$GITHUB_OUTPUT"
-              exit 0
+            if [ "$CHANNEL" != release ]; then
+              echo "**Test build.** Not for general use yet."
+              echo
             fi
-            echo "Merge attempt ${attempt} refused; trying again in 20 seconds."
-            sleep 20
-          done
-          echo "Could not merge ${URL}. If main moved while CI ran, update the branch, wait for CI, and merge by hand; Publish starts on the merge." >&2
-          exit 1
+            echo "These installers are not signed. macOS and Windows warn before opening them."
+            echo "How to install, what to test, and how to report back:"
+            echo "[docs/testing-guide.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/docs/testing-guide.md)."
+            echo
+            echo "| System | File |"
+            echo "| --- | --- |"
+            echo "| macOS 14 or later (Apple silicon and Intel) | \`.dmg\` |"
+            echo "| Ubuntu 22.04 or later | \`.deb\` |"
+            echo "| Windows 11, 64-bit (Windows 10 best effort) | \`-setup.exe\` (or \`.msi\`) |"
+            echo
+            echo "Cleanups cannot be undone; files do not go to the Trash."
+            echo "Check a download against \`SHA256SUMS.txt\`."
+            echo
+            echo "## Changes"
+            echo
+            scripts/changelog-section.sh "$VERSION"
+            echo
+            echo "Earlier versions: [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/CHANGELOG.md)."
+          } > notes.md
 
-      - name: Delete the release branch
-        env:
-          BRANCH: ${{ steps.version.outputs.branch }}
-        run: git push origin --delete "$BRANCH" || echo "Could not delete ${BRANCH}; delete it by hand."
-
-      # A merge made with the workflow token does not start push workflows,
-      # so Publish and the CI run on main are started here. Publish builds
-      # the head of main, so it starts only while that is still the release
-      # commit. The CI run on main lets the next Release run start from it.
-      - name: Start Publish
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGED: ${{ steps.merge.outputs.sha }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
           CHANNEL: ${{ inputs.channel }}
+          SHA: ${{ needs.version.outputs.sha }}
         run: |
-          head=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$head" != "$MERGED" ]; then
-            echo "main moved past the release commit ${MERGED} before Publish could start. Run Actions → Publish by hand only if main holds v${VERSION} and nothing unreleased." >&2
-            exit 1
-          fi
-          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main -f channel="$CHANNEL"
-          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
-          {
-            echo
-            echo "Merged as ${MERGED}. Publish is building v${VERSION}: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/publish.yml"
-          } >> "$GITHUB_STEP_SUMMARY"
+          flags=""
+          case "$CHANNEL" in
+            prerelease) flags="--prerelease" ;;
+            draft) flags="--draft" ;;
+          esac
+          gh release create "v${VERSION}" dist-release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --title "Space Optimiser ${VERSION}" \
+            --notes-file notes.md \
+            $flags
+          echo "Released v${VERSION} (${CHANNEL}): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Drafts stay off the download page, so a draft does not rebuild it.
+  pages:
+    name: download page
+    needs: publish
+    if: inputs.channel != 'draft'
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
