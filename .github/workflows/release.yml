@@ -21,8 +21,10 @@ name: Release
 # repository. Updates are signed with the updater key (see below).
 #
 # Needs once:
-#   - The main-branch ruleset lets GitHub Actions bypass it, so step 1 can
-#     push the version commit (.github/rulesets/main-branch.json).
+#   - A deploy key with write access, its private key in the secret
+#     RELEASE_DEPLOY_KEY. Step 1 pushes the version commit with it; the
+#     main-branch ruleset lets deploy keys bypass it (a repository owned by
+#     a person cannot list GitHub Actions there). See the README.
 #   - Secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
 #   - Settings → Pages → Source "GitHub Actions".
 on:
@@ -55,16 +57,26 @@ jobs:
     name: choose the version
     runs-on: ubuntu-latest
     permissions:
-      contents: write # push the version commit to main
+      contents: read # the push uses the deploy key, not this token
       actions: read # read the CI result of the last pull request
       pull-requests: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.commit.outputs.sha }}
     steps:
+      - name: The deploy key is set
+        env:
+          KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::The RELEASE_DEPLOY_KEY secret is not set. See Releasing in the README."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the tags and every commit since the last one
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Run from main only
         if: github.ref != 'refs/heads/main'
@@ -122,8 +134,9 @@ jobs:
         with:
           node-version: 24
 
-      # A push with the workflow token starts no other workflow, so this
-      # commit runs no CI. It changes only version numbers and the changelog.
+      # It changes only version numbers and the changelog. CI does not run
+      # on pushes, and the Pages workflow does not watch these files, so
+      # the push starts nothing.
       - name: Commit the version to main
         id: commit
         env:
@@ -137,7 +150,7 @@ jobs:
             git add Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json CHANGELOG.md
             git commit -m "chore(release): v${VERSION}"
             if ! git push origin HEAD:main; then
-              echo "Could not push to main. Either main moved (run Release again), or the main-branch ruleset does not let GitHub Actions bypass it: apply .github/rulesets/main-branch.json." >&2
+              echo "Could not push to main. Either main moved (run Release again), or the deploy key cannot bypass the ruleset: check that the key has write access and apply .github/rulesets/main-branch.json." >&2
               exit 1
             fi
           fi

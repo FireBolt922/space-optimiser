@@ -134,7 +134,13 @@ The Pages workflow rebuilds the [download page](https://firebolt922.github.io/sp
 
 The download page needs Settings → Pages → Source set to "GitHub Actions". A custom domain is set on the same settings page; the page uses relative links, so nothing in the repository changes.
 
-The Release workflow pushes its version commit to `main`, so the main-branch ruleset (`.github/rulesets/main-branch.json`) lists GitHub Actions as allowed to bypass it.
+The Release workflow pushes its version commit to `main` with a deploy key, which the main-branch ruleset (`.github/rulesets/main-branch.json`) lets bypass it. To set it up once:
+
+```sh
+dir=$(mktemp -d) && ssh-keygen -q -t ed25519 -N "" -C "release workflow" -f "$dir/key"
+gh repo deploy-key add "$dir/key.pub" --allow-write --title "Release workflow"
+gh secret set RELEASE_DEPLOY_KEY < "$dir/key" && rm -r "$dir"
+```
 
 ## Licence
 
